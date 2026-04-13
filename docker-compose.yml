@@ -1,0 +1,31 @@
+services:
+  tts-studio:
+    build:
+      context: .
+      args:
+        UID: ${UID:-1000}
+        GID: ${GID:-1000}
+    container_name: tts-studio
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./data:/app/data
+      - ./.env:/app/.env:ro
+      - ./app:/app/app
+    environment:
+      - GRADIO_SERVER_NAME=0.0.0.0
+      - GRADIO_SERVER_PORT=7860
+      - DEFAULT_API_BASE=${DEFAULT_API_BASE:-http://URL:11434/v1}
+      - DEFAULT_API_KEY=${DEFAULT_API_KEY:-ollama}
+      - DEFAULT_MODEL=${DEFAULT_MODEL:-deepseek-v3.1:671b-cloud}
+      - TMPDIR=/app/data/tmp
+      - MPLCONFIGDIR=/app/data/tmp/matplotlib
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.connect(('localhost',7860))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
