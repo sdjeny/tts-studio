@@ -18,9 +18,7 @@ from .tts_advanced import synthesize_advanced_line, parse_rate_pitch_from_text
 logger = logging.getLogger(__name__)
 
 # 应用 edge-tts 补丁以支持自定义 SSML
-import sys
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import patch_edge_tts_v2
+from . import patch_edge_tts_v2
 
 async def synthesize_with_azure(
     line: ScriptLine, 

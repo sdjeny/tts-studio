@@ -4,10 +4,13 @@
 import asyncio
 import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# 添加项目根目录到路径
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, project_root)
 
 # 先导入补丁
-import patch_edge_tts_v2
+from app import patch_edge_tts_v2
 
 import edge_tts
 from edge_tts.communicate import ssml_headers_plus_data, mkssml, connect_id, date_to_string
