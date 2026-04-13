@@ -39,6 +39,7 @@ def build_ui():
     initial_api_base = DEFAULT_API_BASE
     initial_api_key = DEFAULT_API_KEY
     initial_model = DEFAULT_MODEL
+    initial_projects_data = []  # 🔑 工程管理表格初始数据
     
     if initial_value:
         logger.info(f"默认选中: {initial_value}")
@@ -84,6 +85,28 @@ def build_ui():
                 initial_api_key = current_project.llm_config.get("api_key", DEFAULT_API_KEY)
                 initial_model = current_project.llm_config.get("model", DEFAULT_MODEL)
                 
+                # 🔑 初始化工程管理表格数据
+                def get_projects_list_init():
+                    """获取工程列表（初始化用）"""
+                    if not PROJECTS_DIR.exists():
+                        return []
+                    json_files = list(PROJECTS_DIR.glob("*.json"))
+                    if not json_files:
+                        return []
+                    json_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+                    data = []
+                    for i, f in enumerate(json_files):
+                        stat = f.stat()
+                        import datetime
+                        mod_time = datetime.datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M')
+                        size_kb = stat.st_size / 1024
+                        size_str = f"{size_kb:.1f} KB" if size_kb < 1024 else f"{size_kb/1024:.1f} MB"
+                        selected_mark = "▶" if i == 0 else ""
+                        data.append([selected_mark, f.name, mod_time, size_str])
+                    return data
+                
+                initial_projects_data = get_projects_list_init()
+                
                 logger.info(f"✅ 预加载成功: {current_project.name}")
                 logger.info(f"  音频片段数: {len(current_project.audio_clips)}")
         except Exception as e:
@@ -105,25 +128,43 @@ def build_ui():
                             new_project_btn = gr.Button("✨ 新建工程", size="sm")
                             save_project_btn = gr.Button("💾 保存工程", variant="primary", size="sm")
                             load_project_btn = gr.UploadButton("📂 加载工程", file_types=[".json"], size="sm")
-                        
-                        gr.Markdown("### 📋 最近的工程")
-                        with gr.Row():
-                            recent_files = gr.Dropdown(
-                                label="快速加载",
-                                choices=initial_choices,
-                                value=initial_value,
-                                interactive=True,
-                                scale=3
-                            )
-                            delete_project_btn = gr.Button("🗑️", size="sm", scale=1)
-                        refresh_files_btn = gr.Button("🔄 刷新列表", size="sm")
+                        project_status = gr.Textbox(label="保存状态", interactive=False, visible=True)
                     
-                    with gr.Column(scale=2):
-                        gr.Markdown("### ⚙️ LLM 配置")
-                        api_base = gr.Textbox(label="API Base", value=initial_api_base)
-                        api_key = gr.Textbox(label="API Key", value=initial_api_key, type="password")
-                        model = gr.Textbox(label="模型", value=initial_model)
-                        gr.Markdown("*LLM 用于自动解析剧本文本，识别角色和对白*")
+                    with gr.Column(scale=1):
+                        gr.Markdown("### 📋 工程管理")
+                        projects_table = gr.Dataframe(
+                            headers=["选中", "工程名称", "修改时间", "文件大小"],
+                            datatype=["str", "str", "str", "str"],
+                            label="",  # 🔑 去掉label
+                            interactive=False,
+                            row_count=2,
+                            wrap=True,
+                            column_count=4,
+                            value=initial_projects_data,
+                            elem_classes="compact-table"
+                        )
+                        # 🔑 隐藏变量：记录选中的工程行索引
+                        selected_project_index = gr.Number(value=-1, visible=False)
+                        # 🔑 删除确认区域（默认隐藏）
+                        with gr.Row(visible=False) as delete_confirm_row:
+                            delete_warning_text = gr.Markdown("", visible=True)
+                        with gr.Row(visible=False) as delete_buttons_row:
+                            confirm_delete_btn = gr.Button("✅ 确认删除", variant="stop", size="sm")
+                            cancel_delete_btn = gr.Button("❌ 取消", size="sm")
+                        # 🔑 定时器：10秒后自动隐藏
+                        auto_hide_timer = gr.Timer(value=10, active=False)
+                        with gr.Row():
+                            load_selected_btn = gr.Button("📂 加载选中工程", variant="primary", size="sm")
+                            delete_selected_btn = gr.Button("🗑️ 删除选中工程", size="sm", variant="stop")
+                            refresh_projects_btn = gr.Button("🔄 刷新列表", size="sm")
+                
+                # LLM配置在下面占一整行
+                gr.Markdown("### ⚙️ LLM 配置")
+                with gr.Row():
+                    api_base = gr.Textbox(label="API Base", value=initial_api_base, scale=2)
+                    api_key = gr.Textbox(label="API Key", value=initial_api_key, type="password", scale=2)
+                    model = gr.Textbox(label="模型", value=initial_model, scale=1)
+                gr.Markdown("*LLM 用于自动解析剧本文本，识别角色和对白*")
                 
                 # 🔑 角色管理面板
                 with gr.Accordion("🎭 角色管理", open=False):
@@ -667,14 +708,19 @@ def build_ui():
                 logger.info(f"✅ 工程已保存: {path}")
                 logger.info(f"  文件大小: {os.path.getsize(path)} bytes")
                 logger.info(f"{'=' * 60}")
-                return str(path)
+                
+                # 🔑 返回状态信息，而不是文件组件
+                if current_project_path and os.path.exists(current_project_path):
+                    return f"✅ 已覆盖保存: {os.path.basename(path)}"
+                else:
+                    return f"✅ 已创建新工程: {os.path.basename(path)}"
             except Exception as e:
                 logger.error(f"❌ 保存失败: {type(e).__name__}: {e}")
                 import traceback
                 logger.error(traceback.format_exc())
                 raise
         
-        save_project_btn.click(save_project, None, gr.File(label="工程文件"))
+        save_project_btn.click(save_project, None, project_status)
         
         def load_project(file=None):
             import logging
@@ -763,53 +809,92 @@ def build_ui():
         new_project_btn.click(new_project, None, [clips_table, project_name, input_text, api_base, api_key, model, characters_table, clip_character])
         
         # 工程文件列表管理
-        def get_recent_projects():
-            """获取最近的工程文件列表"""
+        def get_projects_list():
+            """获取所有工程文件列表，带详细信息"""
+            import logging
+            logger = logging.getLogger(__name__)
+            
             if not PROJECTS_DIR.exists():
+                logger.warning(f"工程目录不存在: {PROJECTS_DIR}")
                 return []
             
             # 获取所有 JSON 文件
             json_files = list(PROJECTS_DIR.glob("*.json"))
             if not json_files:
+                logger.info("没有找到工程文件")
                 return []
             
             # 按修改时间排序，最新的在前
             json_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
             
-            # 返回文件名列表（最多显示20个）
-            return [f.name for f in json_files[:20]]
+            # 构建表格数据
+            data = []
+            for i, f in enumerate(json_files):
+                stat = f.stat()
+                # 格式化修改时间
+                import datetime
+                mod_time = datetime.datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M')
+                # 格式化文件大小
+                size_kb = stat.st_size / 1024
+                if size_kb < 1024:
+                    size_str = f"{size_kb:.1f} KB"
+                else:
+                    size_str = f"{size_kb/1024:.1f} MB"
+                
+                # 第一行标记为选中（最新工程）
+                selected_mark = "▶" if i == 0 else ""
+                
+                data.append([
+                    selected_mark,      # 选中标记
+                    f.name,             # 工程名称
+                    mod_time,           # 修改时间
+                    size_str            # 文件大小
+                ])
+            
+            logger.info(f"✅ 找到 {len(data)} 个工程文件")
+            return data
         
-        def refresh_project_list():
-            """刷新工程文件列表"""
+        def refresh_projects_table():
+            """刷新工程列表表格"""
+            return get_projects_list()
+        
+        # 绑定工程管理事件
+        
+        def on_project_table_select(evt: gr.SelectData):
+            """记录选中的工程行索引"""
+            if evt.index:
+                return evt.index[0]
+            return -1
+        
+        projects_table.select(on_project_table_select, None, selected_project_index)
+        
+        def load_selected_project(row_index):
+            """加载选中的工程"""
             import logging
             logger = logging.getLogger(__name__)
-            files = get_recent_projects()
-            logger.info(f"找到 {len(files)} 个工程文件")
-            # 只返回下拉框的更新，不自动加载
-            return gr.update(choices=files, value=files[0] if files else None)
-        
-        def load_from_dropdown(selected_file):
-            """从下拉列表加载工程"""
-            import logging
-            logger = logging.getLogger(__name__)
-            nonlocal current_project_path  # 🔑 使用 nonlocal 访问外部变量
+            nonlocal current_project_path
             
-            if not selected_file:
-                logger.warning("未选择文件")
-                return [], "未命名", "", DEFAULT_API_BASE, DEFAULT_API_KEY, DEFAULT_MODEL, [], gr.update(choices=[], value=None)
+            row_idx = int(row_index)
+            if row_idx < 0:
+                raise gr.Error("❌ 请先在列表中选择一个工程")
             
-            file_path = PROJECTS_DIR / selected_file
+            # 获取所有工程列表
+            projects_data = get_projects_list()
+            if row_idx >= len(projects_data):
+                raise gr.Error("❌ 选中的工程不存在")
+            
+            file_name = projects_data[row_idx][1]  # 第二列是文件名
+            
+            file_path = PROJECTS_DIR / file_name
             if not file_path.exists():
                 raise gr.Error(f"文件不存在: {file_path}")
             
-            logger.info(f"从下拉列表加载: {selected_file}")
-            logger.info(f"完整路径: {file_path}")
+            logger.info(f"📂 加载工程: {file_name}")
             
-            # 直接调用加载逻辑，不使用 UploadButton 的文件对象
             global current_project
             try:
                 current_project = load_project_from_file(str(file_path))
-                current_project_path = str(file_path)  # 🔑 记录当前工程路径
+                current_project_path = str(file_path)
                 logger.info(f"✅ 工程已加载")
                 logger.info(f"  工程名: {current_project.name}")
                 logger.info(f"  音频片段数: {len(current_project.audio_clips)}")
@@ -821,9 +906,6 @@ def build_ui():
                 api_key_val = llm_cfg.get("api_key", DEFAULT_API_KEY)
                 model_val = llm_cfg.get("model", DEFAULT_MODEL)
                 
-                logger.info(f"  LLM API Base: {api_base_val}")
-                logger.info(f"  LLM Model: {model_val}")
-                
                 # 🔑 刷新角色相关数据
                 characters_data = refresh_characters_table()
                 character_choices = get_character_choices()
@@ -834,57 +916,141 @@ def build_ui():
                     value=None
                 )
                 
-                # 返回：clips_table, project_name, input_text, api_base, api_key, model, characters_table, clip_character choices
-                return refresh_clips_table(), current_project.name, current_project.raw_text, api_base_val, api_key_val, model_val, characters_data, character_dropdown_update
+                # 🔑 刷新表格，高亮当前加载的工程
+                updated_projects_data = get_projects_list()
+                for row in updated_projects_data:
+                    if row[1] == file_name:
+                        row[0] = "▶"
+                    else:
+                        row[0] = ""
+                
+                msg = f"✅ 已加载工程: {file_name}"
+                logger.info(msg)
+                
+                # 返回：clips_table, project_name, input_text, api_base, api_key, model, characters_table, clip_character, projects_table, project_status
+                return (
+                    refresh_clips_table(), 
+                    current_project.name, 
+                    current_project.raw_text, 
+                    api_base_val, 
+                    api_key_val, 
+                    model_val, 
+                    characters_data, 
+                    character_dropdown_update,
+                    updated_projects_data,
+                    msg
+                )
             except Exception as e:
                 logger.error(f"❌ 加载失败: {type(e).__name__}: {e}")
                 import traceback
                 logger.error(traceback.format_exc())
                 raise
         
-        refresh_files_btn.click(refresh_project_list, None, recent_files)
-        
-        # 🔑 删除工程功能
-        def delete_project(selected_file):
-            """删除选中的工程文件"""
+        def delete_selected_project(row_index):
+            """点击删除按钮，显示确认区域"""
             import logging
             logger = logging.getLogger(__name__)
             
-            if not selected_file:
-                raise gr.Error("请先选择一个工程文件")
+            row_idx = int(row_index)
+            if row_idx < 0:
+                raise gr.Error("❌ 请先在列表中选择一个工程")
             
-            file_path = PROJECTS_DIR / selected_file
+            # 获取所有工程列表
+            projects_data = get_projects_list()
+            if row_idx >= len(projects_data):
+                raise gr.Error("❌ 选中的工程不存在")
+            
+            file_name = projects_data[row_idx][1]  # 第二列是文件名
+            
+            # 🔑 显示警告信息和确认按钮
+            warning_msg = f"### ⚠️ 警告\n\n确定要删除工程 **'{file_name}'** 吗？\n\n此操作不可恢复！请在10秒内确认。"
+            logger.info(f"🗑️ 请求删除工程: {file_name}（显示确认）")
+            return gr.update(visible=True), warning_msg, gr.update(visible=True)
+        
+        def auto_hide_delete_confirm():
+            """10秒后自动隐藏确认区域"""
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info("⏰ 10秒超时，自动隐藏确认区域")
+            return gr.update(visible=False), "", gr.update(visible=False), gr.update(active=False)
+        
+        def confirm_delete_project(row_index):
+            """确认删除工程"""
+            import logging
+            logger = logging.getLogger(__name__)
+            nonlocal current_project_path
+            
+            row_idx = int(row_index)
+            if row_idx < 0:
+                raise gr.Error("❌ 请先在列表中选择一个工程")
+            
+            # 获取所有工程列表
+            projects_data = get_projects_list()
+            if row_idx >= len(projects_data):
+                raise gr.Error("❌ 选中的工程不存在")
+            
+            file_name = projects_data[row_idx][1]  # 第二列是文件名
+            
+            file_path = PROJECTS_DIR / file_name
             if not file_path.exists():
                 raise gr.Error(f"文件不存在: {file_path}")
             
-            logger.info(f"🗑️ 删除工程: {selected_file}")
+            logger.info(f"🗑️ 确认删除工程: {file_name}")
             
             try:
                 os.remove(str(file_path))
                 logger.info(f"✅ 已删除: {file_path}")
                 
                 # 如果删除的是当前工程，重置路径
-                nonlocal current_project_path
                 if current_project_path and str(file_path) == current_project_path:
                     current_project_path = None
                     logger.info("  ℹ️ 已清除当前工程路径")
                 
                 # 刷新列表
-                files = get_recent_projects()
-                return gr.update(choices=files, value=files[0] if files else None), f"✅ 已删除工程: {selected_file}"
+                updated_projects_data = get_projects_list()
+                msg = f"✅ 已删除工程: {file_name}"
+                logger.info(msg)
+                
+                # 隐藏确认区域
+                return updated_projects_data, msg, gr.update(visible=False), "", gr.update(visible=False), gr.update(active=False)
             except Exception as e:
                 logger.error(f"❌ 删除失败: {e}")
                 raise gr.Error(f"删除失败: {e}")
         
-        delete_project_btn.click(delete_project, [recent_files], [recent_files, editor_status])
+        def cancel_delete():
+            """取消删除"""
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info("❌ 取消删除操作")
+            return gr.update(visible=False), "", gr.update(visible=False), gr.update(active=False)
         
-        # 只有当用户主动选择时才加载工程（避免页面加载时自动触发）
-        def on_recent_files_change(selected_file):
-            if not selected_file:
-                return [], "未命名", "", DEFAULT_API_BASE, DEFAULT_API_KEY, DEFAULT_MODEL, [], gr.update(choices=[], value=None)
-            return load_from_dropdown(selected_file)
-        
-        recent_files.change(on_recent_files_change, [recent_files], [clips_table, project_name, input_text, api_base, api_key, model, characters_table, clip_character])
+        # 绑定工程管理事件
+        refresh_projects_btn.click(refresh_projects_table, None, projects_table)
+        load_selected_btn.click(load_selected_project, [selected_project_index], [
+            clips_table, project_name, input_text, api_base, api_key, model, 
+            characters_table, clip_character, projects_table, project_status
+        ])
+        # 🔑 删除按钮：显示确认区域并启动定时器
+        delete_selected_btn.click(delete_selected_project, [selected_project_index], [
+            delete_confirm_row, delete_warning_text, delete_buttons_row
+        ])
+        delete_selected_btn.click(
+            fn=lambda: gr.update(active=True),
+            inputs=None,
+            outputs=auto_hide_timer
+        )
+        # 🔑 10秒后自动隐藏
+        auto_hide_timer.tick(auto_hide_delete_confirm, None, [
+            delete_confirm_row, delete_warning_text, delete_buttons_row, auto_hide_timer
+        ])
+        # 🔑 确认删除按钮：执行删除
+        confirm_delete_btn.click(confirm_delete_project, [selected_project_index], [
+            projects_table, project_status, delete_confirm_row, delete_warning_text, delete_buttons_row, auto_hide_timer
+        ])
+        # 🔑 取消按钮：隐藏确认区域
+        cancel_delete_btn.click(cancel_delete, None, [
+            delete_confirm_row, delete_warning_text, delete_buttons_row, auto_hide_timer
+        ])
         
         def clear_all():
             current_project.raw_text = ""
