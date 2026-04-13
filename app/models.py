@@ -44,6 +44,21 @@ class ScriptLine:
     rate: str
     pitch: str
     ssml_text: str = ""          # SSML标记文本（直接发送给TTS）
+    
+    def get_tts_text(self) -> str:
+        """
+        获取用于 TTS 合成的文本
+        
+        优先级：
+        1. 如果 ssml_text 非空，使用 ssml_text（包含标记的完整文本）
+        2. 否则使用 text（纯文本）
+        
+        Returns:
+            用于 TTS 合成的文本
+        """
+        if self.ssml_text and self.ssml_text.strip():
+            return self.ssml_text
+        return self.text
 
 @dataclass
 class Project:

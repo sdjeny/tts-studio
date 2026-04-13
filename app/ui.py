@@ -107,8 +107,34 @@ def build_ui():
                 
                 initial_projects_data = get_projects_list_init()
                 
+                # 🔑 初始化角色相关数据
+                def refresh_characters_table_init():
+                    """刷新角色列表表格（初始化用）"""
+                    if not current_project.characters:
+                        return []
+                    data = []
+                    for c in current_project.characters:
+                        data.append([
+                            c.name,
+                            c.voice_id,
+                            c.rate,
+                            c.pitch,
+                            c.personality[:20] if c.personality else ""
+                        ])
+                    return data
+                
+                def get_character_choices_init():
+                    """获取角色选择列表（初始化用）"""
+                    if not current_project.characters:
+                        return []
+                    return [c.name for c in current_project.characters]
+                
+                initial_characters_data = refresh_characters_table_init()
+                initial_character_choices = get_character_choices_init()
+                
                 logger.info(f"✅ 预加载成功: {current_project.name}")
                 logger.info(f"  音频片段数: {len(current_project.audio_clips)}")
+                logger.info(f"  角色数: {len(current_project.characters)}")
         except Exception as e:
             logger.error(f"❌ 预加载失败: {e}")
             import traceback
@@ -175,7 +201,8 @@ def build_ui():
                         label="已定义的角色",
                         interactive=False,
                         row_count=(5, "dynamic"),
-                        wrap=True
+                        wrap=True,
+                        value=initial_characters_data  # 🔑 设置初始值
                     )
                     
                     with gr.Row():
@@ -286,7 +313,7 @@ def build_ui():
                         with gr.Row():
                             clip_character = gr.Dropdown(
                                 label="从角色列表选择",
-                                choices=[],
+                                choices=initial_character_choices,  # 🔑 设置初始choices
                                 value=None,
                                 interactive=True,
                                 allow_custom_value=False,
@@ -333,12 +360,36 @@ def build_ui():
                             add_pause_btn = gr.Button("⏸️ 插入", size="sm", scale=1)
                         
                         gr.Markdown("#### ❗ 添加强调")
-                        emphasis_level = gr.Radio(
-                            choices=[("强烈", "strong"), ("中等", "moderate"), ("减弱", "reduced")],
-                            value="strong",
-                            label="程度"
-                        )
-                        add_emphasis_btn = gr.Button("❗ 添加", size="sm")
+                        with gr.Row():
+                            emphasis_preset = gr.Dropdown(
+                                choices=[
+                                    ("强烈", "strong"),
+                                    ("中等", "moderate"),
+                                    ("减弱", "reduced"),
+                                    ("极慢强调", "very_slow"),
+                                    ("快速激昂", "fast_excited"),
+                                    ("低音沉稳", "low_pitch"),
+                                    ("高音尖锐", "high_pitch"),
+                                    ("慢速+停顿", "slow_pause"),
+                                    ("自定义", "custom")
+                                ],
+                                value="strong",
+                                label="预设",
+                                scale=2
+                            )
+                            add_emphasis_btn = gr.Button("❗ 添加", size="sm", scale=1)
+                        
+                        with gr.Row():
+                            emphasis_target = gr.Textbox(
+                                label="目标文本（可选）",
+                                placeholder="留空则对整个文本生效",
+                                scale=2
+                            )
+                        
+                        with gr.Row():
+                            emphasis_rate = gr.Textbox(value="-20", label="语速 rate (%)", scale=1)
+                            emphasis_pitch = gr.Textbox(value="-20", label="音调 pitch (Hz)", scale=1)
+                            emphasis_volume = gr.Textbox(value="10", label="音量 volume (%)", scale=1)
                         
                         with gr.Row():
                             clear_markers_btn = gr.Button("🧹 清除标记", size="sm")
@@ -1187,7 +1238,30 @@ def build_ui():
             # 查找角色
             char = next((c for c in current_project.characters if c.name == character_name), None)
             if not char:
-                logger.warning(f"⚠️ 未找到角色: {character_name}")
+                logger.warning(f"⚠️ 未找到角色: {character_name}，自动创建")
+                # 🔑 自动创建角色
+                from .models import Character
+                new_char = Character(
+                    name=character_name,
+                    voice_id="zh-CN-YunjianNeural",
+                    rate="+0%",
+                    pitch="+0Hz",
+                    volume=1.0,
+                    personality="",
+                    description=f"自动创建的角色：{character_name}",
+                    age="",
+                    gender="",
+                    emotion_style="",
+                    notes=""
+                )
+                current_project.characters.append(new_char)
+                logger.info(f"✅ 已自动创建角色: {character_name}")
+                
+                # 🔑 刷新UI
+                characters_data = refresh_characters_table()
+                character_choices = get_character_choices()
+                
+                # 注意：这里无法直接更新clip_character的choices，需要在调用方处理
                 return "zh-CN-YunjianNeural", 0, 0, 1.0
             
             logger.info(f"✅ 选择角色: {char.name}, 音色: {char.voice_id}")
@@ -1371,8 +1445,9 @@ def build_ui():
                     logger.info(f"  ✅ 找到匹配的 ScriptLine")
                     logger.info(f"  原 SSML: {getattr(line, 'ssml_text', '')[:30]}...")
                     line.voice = voice
-                    line.rate = str(rate) + "%"
-                    line.pitch = str(pitch) + "Hz"
+                    # 确保 rate 和 pitch 有正确的符号前缀（Edge-TTS 要求）
+                    line.rate = f"{rate:+d}%"
+                    line.pitch = f"{pitch:+d}Hz"
                     line.volume = volume
                     line.ssml_text = ssml_text  # 保存 SSML 文本
                     logger.info(f"  新 SSML: {line.ssml_text[:30]}...")
@@ -1381,8 +1456,9 @@ def build_ui():
                 
                 # 更新 clip 属性
                 clip.voice = voice
-                clip.rate = str(rate) + "%"
-                clip.pitch = str(pitch) + "Hz"
+                # 确保 rate 和 pitch 有正确的符号前缀（Edge-TTS 要求）
+                clip.rate = f"{rate:+d}%"
+                clip.pitch = f"{pitch:+d}Hz"
                 clip.volume = volume
                 clip.ssml_text = ssml_text  # 保存 SSML 文本
                 
@@ -1443,23 +1519,80 @@ def build_ui():
             [ssml_text_display, editor_status]
         )
         
-        def add_emphasis_marker(ssml_text, level):
-            """添加强调标记 - 包裹整个文本"""
-            marked_text = f"[emphasis={level}]" + ssml_text + "[/emphasis]"
-            level_names = {"strong": "强烈强调", "moderate": "中等强调", "reduced": "减弱强调"}
-            return marked_text, f"✅ 已添加{level_names.get(level, level)}标记"
+        def add_emphasis_marker(ssml_text, preset, target_text, rate, pitch, volume):
+            """添加强调标记 - 使用 <prosody> 标签包裹文本
+            如果指定了 target_text，则只对该文本添加标记；否则对整个文本生效
+            """
+            # 预设参数映射（volume 必须使用百分比格式，如 +20%，不能是小数如 1.2）
+            if preset == "slow_pause":
+                prosody_text = f'<prosody rate="-20%" pitch="+5Hz" volume="+10%">{target_text or ssml_text}</prosody><pause=500>'
+            else:
+                prosody_text = f'<prosody rate="{params["rate"]}" pitch="{params["pitch"]}" volume="{params["volume"]}">{target_text or ssml_text}</prosody>'
+            
+            # 如果指定了目标文本，则在原文中查找并替换
+            if target_text and target_text.strip():
+                target = target_text.strip()
+                if target in ssml_text:
+                    new_text = ssml_text.replace(target, prosody_text, 1)
+                    return new_text, f"✅ 已对目标文本添加{level_names.get(preset, preset)}标记", ""
+                else:
+                    # 目标文本不存在，追加到末尾
+                    new_text = ssml_text + prosody_text
+                    return new_text, f"⚠️ 未找到目标文本，已追加到末尾", ""
+            else:
+                # 未指定目标文本，对整个文本生效
+                return prosody_text, f"✅ 已添加{level_names.get(preset, preset)}标记（整段）", ""
         
         add_emphasis_btn.click(
             add_emphasis_marker,
-            [ssml_text_display, emphasis_level],
-            [ssml_text_display, editor_status]
+            [ssml_text_display, emphasis_preset, emphasis_target, emphasis_rate, emphasis_pitch, emphasis_volume],
+            [ssml_text_display, editor_status, emphasis_target]
+        )
+        
+        def on_emphasis_preset_change(preset):
+            """当预设改变时，更新下方的 rate/pitch/volume 显示值"""
+            presets = {
+                "strong": {"rate": "-20%", "pitch": "+10Hz", "volume": "+20%"},
+                "moderate": {"rate": "-10%", "pitch": "+5Hz", "volume": "+10%"},
+                "reduced": {"rate": "+10%", "pitch": "-5Hz", "volume": "-10%"},
+                "very_slow": {"rate": "-30%", "pitch": "+0Hz", "volume": "+15%"},
+                "fast_excited": {"rate": "+40%", "pitch": "+20Hz", "volume": "+25%"},
+                "low_pitch": {"rate": "+0%", "pitch": "-20Hz", "volume": "+10%"},
+                "high_pitch": {"rate": "+0%", "pitch": "+30Hz", "volume": "+10%"},
+                "slow_pause": {"rate": "-20%", "pitch": "+5Hz", "volume": "+10%"},
+                "custom": {"rate": "-20%", "pitch": "+10Hz", "volume": "+20%"}  # custom 使用默认值
+            }
+            params = presets.get(preset, presets["strong"])
+            # 提取数值，去掉单位
+            def extract_numeric_value(param_val, param_type):
+                if param_type == "rate" and param_val.endswith('%'):
+                    return param_val[:-1]  # 去掉 % 符号
+                elif param_type == "pitch" and param_val.endswith('Hz'):
+                    return param_val[:-2]  # 去掉 Hz
+                elif param_type == "volume" and param_val.endswith('%'):
+                    return param_val[:-1]  # 去掉 % 符号
+                return param_val
+            
+            rate_val = extract_numeric_value(params["rate"], "rate")
+            pitch_val = extract_numeric_value(params["pitch"], "pitch")
+            volume_val = extract_numeric_value(params["volume"], "volume")
+            return rate_val, pitch_val, volume_val
+        
+        emphasis_preset.change(
+            on_emphasis_preset_change,
+            [emphasis_preset],
+            [emphasis_rate, emphasis_pitch, emphasis_volume]
         )
         
         def clear_all_markers(ssml_text):
             """清除所有标记 - 恢复纯文本"""
             import re
-            # 移除所有方括号标记
-            clean_text = re.sub(r'\[[^\]]+\]', '', ssml_text)
+            # 移除 <prosody> 标签，保留内容
+            clean_text = re.sub(r'<prosody[^>]*>(.*?)</prosody>', r'\1', ssml_text, flags=re.DOTALL)
+            # 移除 <pause> 标记
+            clean_text = re.sub(r'<pause=\d+>', '', clean_text)
+            # 移除 [phoneme] 标记，保留原字
+            clean_text = re.sub(r'\[phoneme=[^\]]+\](.*?)\[/phoneme\]', r'\1', clean_text)
             return clean_text, "✅ 已清除所有标记，恢复纯文本"
         
         clear_markers_btn.click(

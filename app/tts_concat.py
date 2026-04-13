@@ -1,14 +1,14 @@
 """
 音频拼接工具
-使用 pydub（需要 FFmpeg）将多个音频片段拼接成一个
+使用 FFmpeg 命令行将多个音频片段拼接成一个（不依赖 pydub）
 """
 
 import os
 from pathlib import Path
 from typing import List
-from pydub import AudioSegment
 import uuid
 import logging
+import subprocess
 
 from .config import AUDIO_DIR
 
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 def concat_audio_files(audio_files: List[str], output_path: str = None) -> str:
     """
-    按顺序拼接多个音频文件
+    按顺序拼接多个音频文件（使用 FFmpeg concat demuxer）
     
     Args:
         audio_files: 音频文件路径列表
@@ -30,16 +30,11 @@ def concat_audio_files(audio_files: List[str], output_path: str = None) -> str:
     
     logger.info(f"开始拼接 {len(audio_files)} 个音频文件")
     
-    # 加载所有音频
-    combined = AudioSegment.empty()
-    
+    # 验证所有文件存在
     for i, file_path in enumerate(audio_files):
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"音频文件不存在: {file_path}")
-        
-        logger.info(f"加载片段 {i+1}/{len(audio_files)}: {Path(file_path).name}")
-        audio = AudioSegment.from_mp3(file_path)
-        combined += audio  # 按顺序拼接
+        logger.info(f"  片段 {i+1}/{len(audio_files)}: {Path(file_path).name}")
     
     # 生成输出路径
     if output_path is None:
@@ -49,11 +44,48 @@ def concat_audio_files(audio_files: List[str], output_path: str = None) -> str:
     output_dir = Path(output_path).parent
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # 导出
-    logger.info(f"导出拼接音频: {output_path}")
-    combined.export(output_path, format="mp3")
-    
-    logger.info(f"✅ 拼接完成，总时长: {len(combined) / 1000:.2f} 秒")
+    # 创建 FFmpeg concat 列表文件
+    list_file = str(AUDIO_DIR / f"concat_list_{uuid.uuid4().hex[:8]}.txt")
+    try:
+        with open(list_file, 'w', encoding='utf-8') as f:
+            for file_path in audio_files:
+                # FFmpeg concat demuxer 要求路径使用正斜杠或转义反斜杠
+                abs_path = os.path.abspath(file_path).replace('\\', '/')
+                f.write(f"file '{abs_path}'\n")
+        
+        # 使用 FFmpeg concat demuxer 拼接
+        cmd = [
+            './ffmpeg.exe',
+            '-f', 'concat',
+            '-safe', '0',
+            '-i', list_file,
+            '-c', 'copy',  # 直接复制，不重新编码
+            '-y',  # 覆盖输出文件
+            output_path
+        ]
+        
+        logger.info(f"执行 FFmpeg 拼接命令...")
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='ignore'
+        )
+        
+        if result.returncode != 0:
+            logger.error(f"FFmpeg 错误: {result.stderr}")
+            raise Exception(f"FFmpeg 拼接失败: {result.stderr}")
+        
+        logger.info(f"✅ 拼接完成: {output_path}")
+        
+    finally:
+        # 清理临时列表文件
+        try:
+            if os.path.exists(list_file):
+                os.remove(list_file)
+        except Exception as e:
+            logger.warning(f"⚠️  清理列表文件失败: {e}")
     
     return output_path
 

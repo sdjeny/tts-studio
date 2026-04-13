@@ -20,6 +20,19 @@ logger = logging.getLogger(__name__)
 # 应用 edge-tts 补丁以支持自定义 SSML
 from . import patch_edge_tts_v2
 
+
+def get_tts_text(line) -> str:
+    """
+    获取用于 TTS 合成的文本（兼容函数，委托给 line.get_tts_text()）
+    
+    Args:
+        line: ScriptLine 对象
+    
+    Returns:
+        用于 TTS 合成的文本
+    """
+    return line.get_tts_text()
+
 async def synthesize_with_azure(
     line: ScriptLine, 
     output_path: str, 
@@ -34,7 +47,9 @@ async def synthesize_with_azure(
     logger.info(f"=" * 60)
     logger.info(f"开始合成音频 (Azure Speech)")
     logger.info(f"  角色: {line.character}")
-    logger.info(f"  文本: {line.text[:50]}..." if len(line.text) > 50 else f"  文本: {line.text}")
+    # 🔑 使用 get_tts_text 获取正确的文本
+    tts_text = get_tts_text(line)
+    logger.info(f"  文本: {tts_text[:50]}..." if len(tts_text) > 50 else f"  文本: {tts_text}")
     logger.info(f"  音色: {line.voice}")
     logger.info(f"  输出路径: {output_path}")
     
@@ -58,7 +73,7 @@ async def synthesize_with_azure(
             logger.info(f"\n尝试 {attempt + 1}/{max_retries}...")
             
             # 执行合成
-            result = speech_synthesizer.speak_text_async(line.text).get()
+            result = speech_synthesizer.speak_text_async(tts_text).get()
             
             # 检查结果
             if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
@@ -71,7 +86,7 @@ async def synthesize_with_azure(
                     duration = audio.info.length
                     logger.info(f"✅ 音频时长: {duration:.2f} 秒")
                 except:
-                    duration = len(line.text) / 4.5
+                    duration = len(tts_text) / 4.5
                     logger.warning(f"⚠️  无法获取准确时长，估算: {duration:.2f} 秒")
                 
                 logger.info(f"=" * 60)
@@ -125,13 +140,15 @@ async def synthesize_single_line(
     logger.info(f"=" * 60)
     logger.info(f"开始合成音频")
     logger.info(f"  角色: {line.character}")
-    logger.info(f"  文本: {line.text[:50]}..." if len(line.text) > 50 else f"  文本: {line.text}")
+    # 🔑 使用 get_tts_text 获取正确的文本
+    tts_input_text = get_tts_text(line)
+    logger.info(f"  文本: {tts_input_text[:50]}..." if len(tts_input_text) > 50 else f"  文本: {tts_input_text}")
     logger.info(f"  音色: {line.voice}")
     logger.info(f"  语速: {line.rate}")
     logger.info(f"  音调: {line.pitch}")
     logger.info(f"  输出路径: {output_path}")
     
-    if not line.text.strip():
+    if not tts_input_text.strip():
         logger.warning("文本为空，跳过合成")
         return 0.0
     
@@ -142,39 +159,36 @@ async def synthesize_single_line(
     
     # 检查是否为高级标记文本
     # 支持两种标记语法：
-    # 1. [rate=-50%]文本[/rate]  - 新语法（TTS 层自动拆分+拼接）
-    # 2. <speak>...</speak>      - 自定义 SSML（直接传给 edge-tts）
+    # 1. <prosody>...</prosody>, <pause=X>  - 新语法（TTS 层自动拆分+拼接）
+    # 2. <speak>...</speak>                  - 自定义 SSML（直接传给 edge-tts）
     
-    # 检测方括号标记（包括 rate, pitch, pause, emphasis）
-    has_advanced_markers = bool(re.search(r'\[(rate|pitch|pause|emphasis)=', line.text))
-    has_phoneme = bool(re.search(r'\[phoneme=', line.text))
-    has_ssml = line.text.strip().startswith('<speak')
+    # 检测新语法标记（prosody, pause）
+    has_advanced_markers = bool(re.search(r'<prosody|<pause=|\[pause=', get_tts_text(line)))
+    has_phoneme = bool(re.search(r'\[phoneme=', get_tts_text(line)))
+    has_ssml = get_tts_text(line).strip().startswith('<speak')
     
     if has_phoneme:
         # 先预处理 phoneme 标记（替换为同音字）
         logger.info(f"📝 检测到 phoneme 标记，将预处理替换")
-        logger.info(f"   替换前: {line.text[:200]}")
+        original_text = get_tts_text(line)
+        logger.info(f"   替换前: {original_text[:200]}")
         from .tts_parser import preprocess_phoneme_markers
-        processed_text = preprocess_phoneme_markers(line.text)
+        processed_text = preprocess_phoneme_markers(original_text)
         logger.info(f"   替换后: {processed_text[:200]}")
         
-        # 创建新的 line 对象，使用替换后的文本
-        line = ScriptLine(
-            type=line.type,
-            character=line.character,
-            emotion=line.emotion,
-            text=processed_text,
-            voice=line.voice,
-            rate=line.rate,
-            pitch=line.pitch
-        )
+        # 🔑 使用独立变量传递处理后的文本，不修改原始 line 对象
+        tts_input_text = processed_text
         # 重新检测是否有其他标记
-        has_advanced_markers = bool(re.search(r'\[(rate|pitch|pause|emphasis)=', processed_text))
+        has_advanced_markers = bool(re.search(r'<prosody|<pause=', processed_text))
+    else:
+        # 没有 phoneme，直接使用原始文本
+        tts_input_text = get_tts_text(line)
     
     if has_advanced_markers:
         logger.info(f"📝 检测到高级标记文本（新语法），将自动拆分+拼接")
-        return await synthesize_advanced_line(
+        return await synthesize_advanced_text(
             line, 
+            tts_input_text,  # 🔑 传递处理后的文本
             output_path, 
             max_retries
         )
@@ -182,6 +196,7 @@ async def synthesize_single_line(
         logger.info(f"📝 检测到自定义 SSML")
         return await synthesize_simple_text(
             line, 
+            tts_input_text,  # 🔑 传递处理后的文本
             output_path, 
             max_retries
         )
@@ -189,6 +204,7 @@ async def synthesize_single_line(
         # 普通文本
         return await synthesize_simple_text(
             line, 
+            tts_input_text,  # 🔑 传递处理后的文本
             output_path, 
             max_retries
         )
@@ -196,23 +212,31 @@ async def synthesize_single_line(
 
 async def synthesize_simple_text(
     line: ScriptLine,
+    text: str,  # 🔑 新增：处理后的文本
     output_path: str,
     max_retries: int = 3
 ) -> float:
     """
     合成普通文本或自定义 SSML（edge-tts 原生逻辑）
+    
+    Args:
+        line: ScriptLine 对象（用于获取 voice, rate, pitch 等属性）
+        text: 处理后的文本（已替换 phoneme 等）
+        output_path: 输出路径
+        max_retries: 最大重试次数
     """
+    # 🔑 直接使用传入的 text 参数，不再调用 get_tts_text
+    text_for_tts = text
+    
     # 检测是否为自定义 SSML
-    is_custom_ssml = line.text.strip().startswith('<speak')
+    is_custom_ssml = text_for_tts.strip().startswith('<speak')
     
     if is_custom_ssml:
         logger.info(f"检测到自定义 SSML")
-        logger.info(f"SSML 长度: {len(line.text)} 字符")
-        text_for_tts = line.text
+        logger.info(f"SSML 长度: {len(text_for_tts)} 字符")
     else:
         logger.info(f"使用 edge-tts 纯文本模式")
-        logger.info(f"原始文本: {line.text}")
-        text_for_tts = line.text
+        logger.info(f"原始文本: {text_for_tts}")
     
     # 检查是否配置了代理
     proxy = os.getenv("HTTP_PROXY") or os.getenv("https_proxy")
@@ -289,11 +313,18 @@ async def synthesize_simple_text(
 
 async def synthesize_advanced_text(
     line: ScriptLine,
+    text: str,  # 🔑 新增：处理后的文本
     output_path: str,
     max_retries: int = 3
 ) -> float:
     """
     合成高级标记文本（自动拆分+拼接）
+    
+    Args:
+        line: ScriptLine 对象（用于获取 voice, rate, pitch 等属性）
+        text: 处理后的文本（已替换 phoneme，包含标记）
+        output_path: 输出路径
+        max_retries: 最大重试次数
     
     流程：
     1. 解析标记文本，拆分成多个 TextSegment
@@ -305,9 +336,9 @@ async def synthesize_advanced_text(
     logger.info(f"🔧 高级文本合成模式")
     logger.info(f"{'=' * 60}")
     
-    # 步骤1：解析文本
+    # 步骤1：解析文本（使用传入的 text 参数）
     segments = parse_marked_text(
-        line.text,
+        text,
         default_rate=line.rate or "+0%",
         default_pitch=line.pitch or "+0Hz"
     )
@@ -331,26 +362,47 @@ async def synthesize_advanced_text(
             temp_path = str(AUDIO_DIR / temp_filename)
             temp_files.append(temp_path)
             
-            # 创建临时 ScriptLine
-            temp_line = ScriptLine(
-                type=line.type,
-                character=line.character,
-                emotion=line.emotion,
-                text=segment.text,
-                voice=line.voice,
-                rate=segment.rate,
-                pitch=segment.pitch
-            )
-            
-            # 合成这个片段
-            duration = await synthesize_simple_text(
-                temp_line,
-                temp_path,
-                max_retries
-            )
-            
-            total_duration += duration
-            logger.info(f"✅ 片段 {i+1} 完成，时长: {duration:.2f} 秒")
+            if segment.segment_type == 'pause':
+                # 停顿片段：使用 FFmpeg 生成静音
+                pause_ms = int(segment.rate)
+                logger.info(f"⏸️  生成停顿: {pause_ms}ms")
+                
+                import subprocess
+                cmd = [
+                    './ffmpeg.exe',
+                    '-f', 'lavfi',
+                    '-i', 'anullsrc=r=24000:cl=mono',
+                    '-t', str(pause_ms / 1000.0),
+                    '-c:a', 'libmp3lame',
+                    '-y',
+                    temp_path
+                ]
+                subprocess.run(cmd, capture_output=True, check=True)
+                duration = pause_ms / 1000.0
+                total_duration += duration
+                logger.info(f"✅ 停顿片段 {i+1} 完成，时长: {duration:.3f} 秒")
+            else:
+                # 普通文本片段：调用 TTS 合成
+                temp_line = ScriptLine(
+                    type=line.type,
+                    character=line.character,
+                    emotion=line.emotion,
+                    text=segment.text,
+                    voice=line.voice,
+                    rate=segment.rate,
+                    pitch=segment.pitch
+                )
+                
+                # 合成这个片段
+                duration = await synthesize_simple_text(
+                    temp_line,
+                    segment.text,  # 🔑 传递文本参数
+                    temp_path,
+                    max_retries
+                )
+                
+                total_duration += duration
+                logger.info(f"✅ 片段 {i+1} 完成，时长: {duration:.2f} 秒")
         
         # 步骤3：拼接所有片段
         logger.info(f"\n{'=' * 60}")
@@ -393,34 +445,85 @@ async def synthesize_advanced_text(
                 logger.warning(f"⚠️  清理临时文件失败: {e}")
 
 def mix_audio_tracks(clips: List[AudioClip], total_duration: float = None) -> str:
-    """将多个 AudioClip 按时间轴混合，返回最终音频路径"""
+    """
+    将多个 AudioClip 按时间轴混合，返回最终音频路径
+    使用 FFmpeg 命令行实现，不依赖 pydub
+    """
     if not clips:
         return None
     
-    max_end = 0.0
+    # 过滤有效片段
     valid_clips = []
     for clip in clips:
         if clip.is_generated and os.path.exists(clip.file_path):
-            audio = AudioSegment.from_mp3(clip.file_path)
-            if clip.volume != 1.0:
-                audio = audio + (20 * (clip.volume - 1))
-            clip._audio_segment = audio
-            clip._start_ms = int(clip.start_time * 1000)
-            clip._end_ms = clip._start_ms + len(audio)
-            max_end = max(max_end, clip._end_ms)
             valid_clips.append(clip)
+    
+    if not valid_clips:
+        return None
+    
+    # 获取每个片段的时长和计算最大结束时间
+    max_end = 0.0
+    for clip in valid_clips:
+        try:
+            from mutagen.mp3 import MP3
+            audio = MP3(clip.file_path)
+            duration_sec = audio.info.length
+        except:
+            # 估算时长
+            duration_sec = 5.0
+        
+        clip._duration = duration_sec
+        clip._start_ms = int(clip.start_time * 1000)
+        clip._end_ms = clip._start_ms + int(duration_sec * 1000)
+        max_end = max(max_end, clip._end_ms)
     
     if total_duration is None:
         total_duration = max_end / 1000.0
     
-    canvas = AudioSegment.silent(duration=int(total_duration * 1000) + 500)
-    
-    for clip in valid_clips:
-        canvas = canvas.overlay(clip._audio_segment, position=clip._start_ms)
-        del clip._audio_segment
-    
+    # 生成输出路径
     output_path = AUDIO_DIR / f"final_mix_{uuid.uuid4().hex[:8]}.mp3"
-    canvas.export(output_path, format="mp3")
+    
+    # 构建 FFmpeg filter_complex 命令
+    # 使用 amix 或 overlay 方式混合音频
+    inputs = []
+    filter_parts = []
+    
+    for i, clip in enumerate(valid_clips):
+        inputs.extend(['-i', clip.file_path])
+        delay_ms = clip._start_ms
+        # 使用 adelay 滤镜延迟音频
+        filter_parts.append(f"[{i}:a]adelay={delay_ms}|{delay_ms}[a{i}]")
+    
+    # 构建 amix 滤镜链
+    mix_inputs = ''.join([f"[a{i}]" for i in range(len(valid_clips))])
+    filter_parts.append(f"{mix_inputs}amix=inputs={len(valid_clips)}:duration=longest[aout]")
+    
+    filter_complex = ';'.join(filter_parts)
+    
+    cmd = [
+        './ffmpeg.exe',
+        *inputs,
+        '-filter_complex', filter_complex,
+        '-map', '[aout]',
+        '-t', str(total_duration + 0.5),  # 添加 0.5 秒余量
+        '-y',
+        str(output_path)
+    ]
+    
+    import subprocess
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        encoding='utf-8',
+        errors='ignore'
+    )
+    
+    if result.returncode != 0:
+        logger.error(f"FFmpeg 混音错误: {result.stderr}")
+        raise Exception(f"FFmpeg 混音失败: {result.stderr}")
+    
+    logger.info(f"✅ 混音完成: {output_path}")
     return str(output_path)
 
 def generate_silence(duration_sec: float) -> str:

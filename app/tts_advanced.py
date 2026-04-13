@@ -111,11 +111,18 @@ async def synthesize_text_segment(
 
 async def synthesize_advanced_line(
     line: ScriptLine,
+    text: str,  # 🔑 新增：处理后的文本
     output_path: str,
     max_retries: int = 3
 ) -> float:
     """
     合成高级文本行（自动拆分+拼接）
+    
+    Args:
+        line: ScriptLine 对象（用于获取 voice, rate, pitch 等属性）
+        text: 处理后的文本（已替换 phoneme，包含标记）
+        output_path: 输出路径
+        max_retries: 最大重试次数
     
     流程：
     1. 解析文本中的标记
@@ -125,12 +132,13 @@ async def synthesize_advanced_line(
     """
     logger.info(f"=" * 60)
     logger.info(f"🔧 高级合成模式：自动拆分+拼接")
-    logger.info(f"  原始文本: {line.text[:100]}...")
+    # 🔑 使用传入的 text 参数（预处理已在入口完成）
+    logger.info(f"  原始文本: {text[:100]}...")
     logger.info(f"  音色: {line.voice}")
     logger.info(f"=" * 60)
     
     # 步骤1：解析文本
-    segments = parse_marked_text(line.text)
+    segments = parse_marked_text(text)
     
     # 显示分片前的完整文本（已替换 phoneme）
     full_text_after_phoneme = ''.join([seg.text for seg in segments if seg.segment_type != 'pause'])
@@ -141,7 +149,7 @@ async def synthesize_advanced_line(
     for i, seg in enumerate(segments):
         if seg.segment_type == 'pause':
             logger.info(f"  片段 {i+1}: [停顿 {seg.rate}ms]")
-        elif seg.segment_type == 'emphasis':
+        elif seg.is_marked:
             logger.info(f"  片段 {i+1}: rate={seg.rate}, pitch={seg.pitch}, text='{seg.text[:20]}' (强调)")
         else:
             logger.info(f"  片段 {i+1}: rate={seg.rate}, pitch={seg.pitch}, text='{seg.text[:20]}'")
