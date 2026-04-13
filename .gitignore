@@ -43,6 +43,9 @@ test_*.txt
 *_log.txt
 *_output.txt
 
+# 日志目录
+logs/
+
 # FFmpeg
 ffmpeg.exe
 ffprobe.exe
