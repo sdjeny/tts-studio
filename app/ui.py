@@ -19,6 +19,49 @@ def build_ui():
     logger = logging.getLogger(__name__)
     logger.info("🚀 应用启动，手动初始化工程列表...")
     
+    # 🔑 封装：创建确认对话框组件（可复用）
+    def create_confirm_dialog(warning_text: str, confirm_text: str = "✅ 确认", cancel_text: str = "❌ 取消"):
+        """
+        创建带红色边框的确认对话框组件（按钮在框内）
+        
+        Args:
+            warning_text: 警告信息
+            confirm_text: 确认按钮文字
+            cancel_text: 取消按钮文字
+            
+        Returns:
+            tuple: (confirm_row, warning_md, confirm_btn, cancel_btn)
+        """
+        # 确认对话框（红色边框容器）
+        with gr.Row(visible=False) as confirm_row:
+            with gr.Column(elem_classes="confirm-box"):
+                # 警告文本
+                warning_md = gr.Markdown(
+                    f"<div class='confirm-text'>{warning_text}</div>"
+                )
+                # 按钮区域（在框内）
+                with gr.Row():
+                    confirm_btn = gr.Button(confirm_text, variant="stop", size="sm")
+                    cancel_btn = gr.Button(cancel_text, size="sm")
+        
+        return confirm_row, warning_md, confirm_btn, cancel_btn
+    
+    # 🔑 封装：显示确认对话框
+    def show_confirm_dialog(confirm_row, warning_md, message: str):
+        """显示确认对话框并更新警告信息"""
+        return (
+            gr.update(visible=True),
+            gr.update(value=f"<div style='padding:10px 10px 5px 10px;color:#cf1322;font-weight:bold;'>{message}</div>")
+        )
+    
+    # 🔑 封装：隐藏确认对话框
+    def hide_confirm_dialog(confirm_row, warning_md):
+        """隐藏确认对话框并清空警告信息"""
+        return (
+            gr.update(visible=False),
+            gr.update(value="")
+        )
+    
     from pathlib import Path
     projects_dir = Path(PROJECTS_DIR)
     if projects_dir.exists():
@@ -115,6 +158,7 @@ def build_ui():
                     data = []
                     for c in current_project.characters:
                         data.append([
+                            "",  # 选中标记（初始为空）
                             c.name,
                             c.voice_id,
                             c.rate,
@@ -140,6 +184,30 @@ def build_ui():
             import traceback
             logger.error(traceback.format_exc())
     
+    # 自定义CSS防止确认框被Gradio加载状态覆盖
+    custom_css = """
+    .confirm-box {
+        border: 2px solid #ff4d4f !important;
+        border-radius: 8px !important;
+        background: #fff2f0 !important;
+        padding: 12px !important;
+    }
+    .confirm-box * {
+        border-color: #ff4d4f !important;
+    }
+    .confirm-text {
+        color: #cf1322 !important;
+        font-weight: bold !important;
+        font-size: 14px !important;
+        margin-bottom: 10px !important;
+    }
+    /* 防止Gradio加载状态改变边框颜色 */
+    .confirm-box.generating {
+        border-color: #ff4d4f !important;
+        background: #fff2f0 !important;
+    }
+    """
+    
     with gr.Blocks(title="多轨剧本配音工作台") as demo:
         gr.Markdown("# 🎛️ 多轨剧本配音工作台")
         
@@ -150,10 +218,19 @@ def build_ui():
                     with gr.Column(scale=1):
                         gr.Markdown("### 📝 工程信息")
                         project_name = gr.Textbox(label="工程名", value=initial_project_name)
+                        
                         with gr.Row():
                             new_project_btn = gr.Button("✨ 新建工程", size="sm")
                             save_project_btn = gr.Button("💾 保存工程", variant="primary", size="sm")
                             load_project_btn = gr.UploadButton("📂 加载工程", file_types=[".json"], size="sm")
+                        
+                        # 🔑 工程保存覆盖确认区域（使用封装组件）
+                        save_confirm_row, save_warning_text, confirm_save_btn, cancel_save_btn = create_confirm_dialog(
+                            warning_text="⚠️ 工程已存在，是否覆盖保存？",
+                            confirm_text="✅ 覆盖保存",
+                            cancel_text="❌ 取消"
+                        )
+                        
                         project_status = gr.Textbox(label="保存状态", interactive=False, visible=True)
                     
                     with gr.Column(scale=1):
@@ -171,18 +248,18 @@ def build_ui():
                         )
                         # 🔑 隐藏变量：记录选中的工程行索引
                         selected_project_index = gr.Number(value=-1, visible=False)
-                        # 🔑 删除确认区域（默认隐藏）
-                        with gr.Row(visible=False) as delete_confirm_row:
-                            delete_warning_text = gr.Markdown("", visible=True)
-                        with gr.Row(visible=False) as delete_buttons_row:
-                            confirm_delete_btn = gr.Button("✅ 确认删除", variant="stop", size="sm")
-                            cancel_delete_btn = gr.Button("❌ 取消", size="sm")
-                        # 🔑 定时器：10秒后自动隐藏
-                        auto_hide_timer = gr.Timer(value=10, active=False)
+                        
                         with gr.Row():
                             load_selected_btn = gr.Button("📂 加载选中工程", variant="primary", size="sm")
                             delete_selected_btn = gr.Button("🗑️ 删除选中工程", size="sm", variant="stop")
                             refresh_projects_btn = gr.Button("🔄 刷新列表", size="sm")
+                        
+                        # 🔑 删除确认区域（使用封装组件）
+                        delete_confirm_row, delete_warning_text, confirm_delete_btn, cancel_delete_btn = create_confirm_dialog(
+                            warning_text="⚠️ 确定要删除该工程吗？此操作不可恢复！",
+                            confirm_text="✅ 确认删除",
+                            cancel_text="❌ 取消"
+                        )
                 
                 # LLM配置在下面占一整行
                 gr.Markdown("### ⚙️ LLM 配置")
@@ -196,14 +273,18 @@ def build_ui():
                 with gr.Accordion("🎭 角色管理", open=False):
                     gr.Markdown("#### 📋 角色列表")
                     characters_table = gr.Dataframe(
-                        headers=["角色名", "音色", "语速", "音调", "性格摘要"],
-                        datatype=["str", "str", "str", "str", "str"],
+                        headers=["选中", "角色名", "音色", "语速", "音调", "性格摘要"],
+                        datatype=["str", "str", "str", "str", "str", "str"],
                         label="已定义的角色",
-                        interactive=False,
+                        interactive=True,
                         row_count=(5, "dynamic"),
                         wrap=True,
+                        column_count=(6, "fixed"),
                         value=initial_characters_data  # 🔑 设置初始值
                     )
+                    
+                    # 🔑 隐藏变量：记录选中的角色行索引
+                    selected_char_index = gr.Number(value=-1, visible=False)
                     
                     with gr.Row():
                         refresh_chars_btn = gr.Button("🔄 刷新列表", size="sm")
@@ -255,6 +336,13 @@ def build_ui():
                     with gr.Row():
                         save_char_btn = gr.Button("💾 保存角色", variant="primary")
                         clear_char_form_btn = gr.Button("🧹 清空表单", size="sm")
+                    
+                    # 🔑 角色覆盖确认区域（使用封装组件）
+                    char_confirm_row, char_warning_text, confirm_char_btn, cancel_char_btn = create_confirm_dialog(
+                        warning_text="⚠️ 角色已存在，是否覆盖保存？",
+                        confirm_text="✅ 确认覆盖",
+                        cancel_text="❌ 取消"
+                    )
                     
                     char_status = gr.Textbox(label="状态", interactive=False)
             
@@ -727,21 +815,40 @@ def build_ui():
         
         add_sfx_btn.click(add_sfx, [sfx_name, sfx_file, sfx_start, sfx_volume], None)
         
-        def save_project():
+        def prepare_save_project():
+            """准备保存工程，检查是否需要覆盖确认"""
             import logging
             logger = logging.getLogger(__name__)
-            
-            # 🔑 关键：如果已有路径，则覆盖保存；否则创建新文件
             nonlocal current_project_path
             
+            # 检查是否已有工程路径（即是否为覆盖保存）
+            if current_project_path and os.path.exists(current_project_path):
+                # 覆盖保存，需要确认
+                file_name = os.path.basename(current_project_path)
+                logger.info(f"💾 请求覆盖保存工程: {file_name}（等待确认）")
+                warning_msg = f"⚠️ 工程已存在，是否覆盖保存？<br><br>📁 <b>{file_name}</b><br>⚠️ 现有工程文件将被替换！"
+                return show_confirm_dialog(save_confirm_row, save_warning_text, warning_msg)
+            else:
+                # 新工程，直接保存
+                return execute_save_project()
+        
+        def execute_save_project():
+            """执行保存工程操作"""
+            import logging
+            logger = logging.getLogger(__name__)
+            nonlocal current_project_path
+            
+            # 确定保存路径
             if current_project_path and os.path.exists(current_project_path):
                 # 覆盖保存
                 path = current_project_path
+                is_overwrite = True
                 logger.info(f"🔄 覆盖保存工程: {path}")
             else:
                 # 创建新文件
                 path = PROJECTS_DIR / f"{current_project.name}_{int(time.time())}.json"
-                current_project_path = str(path)  # 🔑 更新当前路径
+                current_project_path = str(path)
+                is_overwrite = False
                 logger.info(f"✨ 创建新工程: {path}")
             
             logger.info(f"=" * 60)
@@ -760,18 +867,32 @@ def build_ui():
                 logger.info(f"  文件大小: {os.path.getsize(path)} bytes")
                 logger.info(f"{'=' * 60}")
                 
-                # 🔑 返回状态信息，而不是文件组件
-                if current_project_path and os.path.exists(current_project_path):
-                    return f"✅ 已覆盖保存: {os.path.basename(path)}"
+                # 返回状态信息和隐藏确认区域
+                if is_overwrite:
+                    msg = f"✅ 已覆盖保存: {os.path.basename(path)}"
                 else:
-                    return f"✅ 已创建新工程: {os.path.basename(path)}"
+                    msg = f"✅ 已创建新工程: {os.path.basename(path)}"
+                
+                # 刷新工程列表
+                updated_projects = get_projects_list()
+                hide_result = hide_confirm_dialog(save_confirm_row, save_warning_text)
+                return *hide_result, msg, updated_projects
             except Exception as e:
                 logger.error(f"❌ 保存失败: {type(e).__name__}: {e}")
                 import traceback
                 logger.error(traceback.format_exc())
                 raise
         
-        save_project_btn.click(save_project, None, project_status)
+        def cancel_save():
+            """取消保存，隐藏确认区域"""
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info("❌ 取消保存操作")
+            return hide_confirm_dialog(save_confirm_row, save_warning_text)
+        
+        save_project_btn.click(prepare_save_project, None, [save_confirm_row, save_warning_text])
+        confirm_save_btn.click(execute_save_project, None, [save_confirm_row, save_warning_text, project_status, projects_table])
+        cancel_save_btn.click(cancel_save, None, [save_confirm_row, save_warning_text])
         
         def load_project(file=None):
             import logging
@@ -998,7 +1119,7 @@ def build_ui():
                 raise
         
         def delete_selected_project(row_index):
-            """点击删除按钮，显示确认区域"""
+            """点击删除按钮，显示确认对话框"""
             import logging
             logger = logging.getLogger(__name__)
             
@@ -1014,16 +1135,9 @@ def build_ui():
             file_name = projects_data[row_idx][1]  # 第二列是文件名
             
             # 🔑 显示警告信息和确认按钮
-            warning_msg = f"### ⚠️ 警告\n\n确定要删除工程 **'{file_name}'** 吗？\n\n此操作不可恢复！请在10秒内确认。"
-            logger.info(f"🗑️ 请求删除工程: {file_name}（显示确认）")
-            return gr.update(visible=True), warning_msg, gr.update(visible=True)
-        
-        def auto_hide_delete_confirm():
-            """10秒后自动隐藏确认区域"""
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.info("⏰ 10秒超时，自动隐藏确认区域")
-            return gr.update(visible=False), "", gr.update(visible=False), gr.update(active=False)
+            warning_msg = f"⚠️ 确定要删除该工程吗？此操作不可恢复！<br><br>📁 <b>{file_name}</b>"
+            logger.info(f"🗑️ 请求删除工程: {file_name}（等待确认）")
+            return show_confirm_dialog(delete_confirm_row, delete_warning_text, warning_msg)
         
         def confirm_delete_project(row_index):
             """确认删除工程"""
@@ -1063,17 +1177,18 @@ def build_ui():
                 logger.info(msg)
                 
                 # 隐藏确认区域
-                return updated_projects_data, msg, gr.update(visible=False), "", gr.update(visible=False), gr.update(active=False)
+                hide_result = hide_confirm_dialog(delete_confirm_row, delete_warning_text)
+                return updated_projects_data, msg, *hide_result  # 只需要前两个返回值
             except Exception as e:
                 logger.error(f"❌ 删除失败: {e}")
                 raise gr.Error(f"删除失败: {e}")
         
         def cancel_delete():
-            """取消删除"""
+            """取消删除，隐藏确认区域"""
             import logging
             logger = logging.getLogger(__name__)
             logger.info("❌ 取消删除操作")
-            return gr.update(visible=False), "", gr.update(visible=False), gr.update(active=False)
+            return hide_confirm_dialog(delete_confirm_row, delete_warning_text)
         
         # 绑定工程管理事件
         refresh_projects_btn.click(refresh_projects_table, None, projects_table)
@@ -1081,26 +1196,17 @@ def build_ui():
             clips_table, project_name, input_text, api_base, api_key, model, 
             characters_table, clip_character, projects_table, project_status
         ])
-        # 🔑 删除按钮：显示确认区域并启动定时器
+        # 🔑 删除按钮：显示确认区域
         delete_selected_btn.click(delete_selected_project, [selected_project_index], [
-            delete_confirm_row, delete_warning_text, delete_buttons_row
+            delete_confirm_row, delete_warning_text
         ])
-        delete_selected_btn.click(
-            fn=lambda: gr.update(active=True),
-            inputs=None,
-            outputs=auto_hide_timer
-        )
-        # 🔑 10秒后自动隐藏
-        auto_hide_timer.tick(auto_hide_delete_confirm, None, [
-            delete_confirm_row, delete_warning_text, delete_buttons_row, auto_hide_timer
-        ])
-        # 🔑 确认删除按钮：执行删除
+        # 🔑 确认删除按钮：执行删除并隐藏确认区域
         confirm_delete_btn.click(confirm_delete_project, [selected_project_index], [
-            projects_table, project_status, delete_confirm_row, delete_warning_text, delete_buttons_row, auto_hide_timer
+            projects_table, project_status, delete_confirm_row, delete_warning_text
         ])
         # 🔑 取消按钮：隐藏确认区域
         cancel_delete_btn.click(cancel_delete, None, [
-            delete_confirm_row, delete_warning_text, delete_buttons_row, auto_hide_timer
+            delete_confirm_row, delete_warning_text
         ])
         
         def clear_all():
@@ -1123,11 +1229,12 @@ def build_ui():
                 return []
             
             data = []
-            for char in current_project.characters:
+            for i, char in enumerate(current_project.characters):
                 # 获取音色的显示名称
                 voice_display = next((v[0] for v in VOICE_OPTIONS if v[1] == char.voice_id), char.voice_id)
                 personality_short = char.personality[:20] + "..." if len(char.personality) > 20 else char.personality
                 data.append([
+                    "",  # 选中标记（初始为空）
                     char.name,
                     voice_display,
                     char.rate,
@@ -1142,13 +1249,38 @@ def build_ui():
             """初始化新角色表单"""
             return "", "zh-CN-YunjianNeural", 0, 0, 1.0, "", "", "", "male", "", "", "💡 请填写角色信息后点击保存"
         
-        def save_character(name, voice_id, rate, pitch, volume, personality, description, age, gender, emotion_style, notes):
-            """保存角色"""
+        def prepare_save_character(name, voice_id, rate, pitch, volume, personality, description, age, gender, emotion_style, notes):
+            """准备保存角色，检查是否需要二次确认"""
             import logging
             logger = logging.getLogger(__name__)
             
             if not name or not name.strip():
                 raise gr.Error("❌ 角色名称不能为空")
+            
+            name = name.strip()
+            
+            # 检查是否已存在同名角色
+            existing = next((c for c in current_project.characters if c.name == name), None)
+            
+            if existing:
+                # 存在同名角色，显示确认区域
+                logger.info(f"⚠️ 检测到同名角色: {name}，等待确认")
+                warning_msg = f"⚠️ 角色已存在，是否覆盖保存？<br><br>🎭 <b>{name}</b><br>⚠️ 现有角色的所有配置将被替换！"
+                show_result = show_confirm_dialog(char_confirm_row, char_warning_text, warning_msg)
+                return (
+                    *show_result,
+                    # 返回原值，等待用户确认
+                    name, voice_id, rate, pitch, volume, personality, description, age, gender, emotion_style, notes
+                )
+            else:
+                # 无同名，直接保存
+                logger.info(f"➕ 创建新角色: {name}")
+                return execute_save_character(name, voice_id, rate, pitch, volume, personality, description, age, gender, emotion_style, notes)
+        
+        def execute_save_character(name, voice_id, rate, pitch, volume, personality, description, age, gender, emotion_style, notes):
+            """执行保存角色操作"""
+            import logging
+            logger = logging.getLogger(__name__)
             
             name = name.strip()
             
@@ -1190,7 +1322,21 @@ def build_ui():
                 msg = f"✅ 已创建角色：{name}"
             
             logger.info(msg)
-            return msg, refresh_characters_table()  # 🔑 返回刷新后的表格
+            # 使用当前选中的行索引刷新表格
+            current_selected_idx = int(selected_char_index.value) if hasattr(selected_char_index, 'value') else -1
+            hide_result = hide_confirm_dialog(char_confirm_row, char_warning_text)
+            return (
+                msg,
+                refresh_characters_table_with_selection(current_selected_idx),
+                *hide_result
+            )
+        
+        def cancel_char_operation():
+            """取消角色操作，隐藏确认区域"""
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info("❌ 取消角色操作")
+            return hide_confirm_dialog(char_confirm_row, char_warning_text)
         
         def delete_character(selected_row):
             """删除选中的角色"""
@@ -1202,7 +1348,7 @@ def build_ui():
             
             # Dataframe 返回的是 [[row_data]] 格式
             row_data = selected_row[0] if isinstance(selected_row[0], list) else selected_row
-            char_name = row_data[0]
+            char_name = row_data[1]  # 第1列是选中标记，第2列才是角色名
             
             # 查找并删除角色
             existing = next((c for c in current_project.characters if c.name == char_name), None)
@@ -1213,7 +1359,9 @@ def build_ui():
             msg = f"✅ 已删除角色：{char_name}"
             logger.info(msg)
             
-            return msg, refresh_characters_table()
+            # 使用当前选中的行索引刷新表格
+            current_selected_idx = int(selected_char_index.value) if hasattr(selected_char_index, 'value') else -1
+            return msg, refresh_characters_table_with_selection(current_selected_idx)
         
         def clear_character_form():
             """清空角色编辑表单"""
@@ -1279,18 +1427,156 @@ def build_ui():
             return char.voice_id, rate, pitch, char.volume
         
         # 绑定角色管理事件
-        refresh_chars_btn.click(refresh_characters_table, None, characters_table)
+        
+        def on_char_table_select(evt: gr.SelectData):
+            """记录选中的角色行索引并填充表单"""
+            import logging
+            logger = logging.getLogger(__name__)
+            
+            if not evt.index:
+                logger.warning("⚠️ 未选中任何行")
+                return -1, "", "zh-CN-YunjianNeural", 0, 0, 1.0, "", "", "", "male", "", ""
+            
+            row_idx = evt.index[0]
+            logger.info(f"📋 选中角色行: {row_idx}")
+            
+            # 获取选中的角色信息
+            if row_idx < 0 or row_idx >= len(current_project.characters):
+                logger.warning(f"⚠️ 行索引超出范围: {row_idx}")
+                return -1, "", "zh-CN-YunjianNeural", 0, 0, 1.0, "", "", "", "male", "", ""
+            
+            char = current_project.characters[row_idx]
+            logger.info(f"✅ 加载角色信息: {char.name}")
+            
+            # 🔑 关键：将带单位的字符串转换为数字
+            rate_str = str(char.rate).replace('%', '').strip()
+            pitch_str = str(char.pitch).replace('Hz', '').strip()
+            try:
+                rate = int(rate_str) if rate_str else 0
+                pitch = int(pitch_str) if pitch_str else 0
+            except ValueError:
+                rate = 0
+                pitch = 0
+            
+            return (
+                row_idx,
+                char.name,
+                char.voice_id,
+                rate,
+                pitch,
+                char.volume,
+                char.personality,
+                char.description,
+                char.age,
+                char.gender if char.gender else "male",
+                char.emotion_style,
+                char.notes
+            )
+        
+        def on_char_row_index_change(row_idx):
+            """当选中角色行变化时，刷新表格显示高亮"""
+            return refresh_characters_table_with_selection(int(row_idx))
+        
+        def load_character_to_form(selected_idx):
+            """将选中角色的信息加载到表单"""
+            import logging
+            logger = logging.getLogger(__name__)
+            
+            selected_idx = int(selected_idx)
+            if selected_idx < 0 or selected_idx >= len(current_project.characters):
+                logger.warning(f"⚠️ 无效的行索引: {selected_idx}")
+                return "", "zh-CN-YunjianNeural", 0, 0, 1.0, "", "", "", "male", "", ""
+            
+            char = current_project.characters[selected_idx]
+            logger.info(f"📝 加载角色到表单: {char.name}")
+            
+            # 转换率和音调为数字
+            rate_str = str(char.rate).replace('%', '').strip()
+            pitch_str = str(char.pitch).replace('Hz', '').strip()
+            try:
+                rate = int(rate_str) if rate_str else 0
+                pitch = int(pitch_str) if pitch_str else 0
+            except ValueError:
+                rate = 0
+                pitch = 0
+            
+            return (
+                char.name,
+                char.voice_id,
+                rate,
+                pitch,
+                char.volume,
+                char.personality,
+                char.description,
+                char.age,
+                char.gender if char.gender else "male",
+                char.emotion_style,
+                char.notes
+            )
+        
+        def refresh_characters_table_with_selection(selected_idx=-1):
+            """刷新角色表格，支持高亮选中行（6列结构）"""
+            import logging
+            logger = logging.getLogger(__name__)
+            
+            if not current_project.characters:
+                logger.info("ℹ️ 角色列表为空")
+                return []
+            
+            data = []
+            for i, char in enumerate(current_project.characters):
+                # 获取音色的显示名称
+                voice_display = next((v[0] for v in VOICE_OPTIONS if v[1] == char.voice_id), char.voice_id)
+                personality_short = char.personality[:20] + "..." if len(char.personality) > 20 else char.personality
+                # 高亮选中行：在独立的第一列显示 ▶
+                selected_mark = "▶" if i == selected_idx else ""
+                data.append([
+                    selected_mark,                    # 第1列：选中标记
+                    char.name,                      # 第2列：角色名
+                    voice_display,                  # 第3列：音色
+                    char.rate,                      # 第4列：语速
+                    char.pitch,                     # 第5列：音调
+                    personality_short               # 第6列：性格摘要
+                ])
+            
+            logger.info(f"✅ 刷新角色列表: {len(data)} 个角色")
+            return data
+        
+        characters_table.select(on_char_table_select, None, [
+            selected_char_index,
+            char_name_input, char_voice_input, char_rate_input, char_pitch_input,
+            char_volume_input, char_personality_input, char_description_input,
+            char_age_input, char_gender_input, char_emotion_style_input, char_notes_input
+        ])
+        selected_char_index.change(on_char_row_index_change, [selected_char_index], characters_table)
+        
+        refresh_chars_btn.click(refresh_characters_table_with_selection, None, characters_table)
         add_char_btn.click(add_new_character, None, [
             char_name_input, char_voice_input, char_rate_input, char_pitch_input, 
             char_volume_input, char_personality_input, char_description_input, 
             char_age_input, char_gender_input, char_emotion_style_input, char_notes_input,
             char_status
         ])
-        save_char_btn.click(save_character, [
+        save_char_btn.click(prepare_save_character, [
             char_name_input, char_voice_input, char_rate_input, char_pitch_input,
             char_volume_input, char_personality_input, char_description_input,
             char_age_input, char_gender_input, char_emotion_style_input, char_notes_input
-        ], [char_status, characters_table])
+        ], [
+            char_confirm_row, char_warning_text,
+            char_name_input, char_voice_input, char_rate_input, char_pitch_input,
+            char_volume_input, char_personality_input, char_description_input,
+            char_age_input, char_gender_input, char_emotion_style_input, char_notes_input
+        ])
+        # 🔑 确认覆盖按钮：执行保存并隐藏确认区域
+        confirm_char_btn.click(execute_save_character, [
+            char_name_input, char_voice_input, char_rate_input, char_pitch_input,
+            char_volume_input, char_personality_input, char_description_input,
+            char_age_input, char_gender_input, char_emotion_style_input, char_notes_input
+        ], [char_status, characters_table, char_confirm_row, char_warning_text])
+        # 🔑 取消按钮：隐藏确认区域
+        cancel_char_btn.click(cancel_char_operation, None, [
+            char_confirm_row, char_warning_text
+        ])
         delete_char_btn.click(delete_character, [characters_table], [char_status, characters_table])
         clear_char_form_btn.click(clear_character_form, None, [
             char_name_input, char_voice_input, char_rate_input, char_pitch_input,
@@ -1637,5 +1923,8 @@ def build_ui():
             [ssml_text_display, selected_row_index],
             marked_audio_preview
         )
+    
+    # 注入自定义CSS
+    demo.css = custom_css
     
     return demo

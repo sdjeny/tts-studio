@@ -17,6 +17,13 @@ from .tts_advanced import synthesize_advanced_line, parse_rate_pitch_from_text
 # 配置日志
 logger = logging.getLogger(__name__)
 
+# Azure Speech SDK 可用性检查
+try:
+    import azure.cognitiveservices.speech as speechsdk
+    AZURE_SPEECH_AVAILABLE = True
+except ImportError:
+    AZURE_SPEECH_AVAILABLE = False
+
 # 应用 edge-tts 补丁以支持自定义 SSML
 from . import patch_edge_tts_v2
 
