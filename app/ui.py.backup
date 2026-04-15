@@ -9,8 +9,6 @@ from .config import DEFAULT_API_BASE, DEFAULT_API_KEY, DEFAULT_MODEL, DEFAULT_VO
 from .llm_parser import parse_with_llm
 from .tts_engine import synthesize_single_line, mix_audio_tracks
 from .project_manager import script_lines_to_clips, load_project_from_file, save_project_to_file
-from .ui_package.components import create_confirm_dialog, show_confirm_dialog, hide_confirm_dialog
-from .ui_package.styles import get_custom_css
 
 def build_ui():
     # 🔑 全局变量：跟踪当前工程的文件路径
@@ -21,7 +19,48 @@ def build_ui():
     logger = logging.getLogger(__name__)
     logger.info("🚀 应用启动，手动初始化工程列表...")
     
-    # 确认对话框组件已从 .ui.components 导入
+    # 🔑 封装：创建确认对话框组件（可复用）
+    def create_confirm_dialog(warning_text: str, confirm_text: str = "✅ 确认", cancel_text: str = "❌ 取消"):
+        """
+        创建带红色边框的确认对话框组件（按钮在框内）
+        
+        Args:
+            warning_text: 警告信息
+            confirm_text: 确认按钮文字
+            cancel_text: 取消按钮文字
+            
+        Returns:
+            tuple: (confirm_row, warning_md, confirm_btn, cancel_btn)
+        """
+        # 确认对话框（红色边框容器）
+        with gr.Row(visible=False) as confirm_row:
+            with gr.Column(elem_classes="confirm-box"):
+                # 警告文本
+                warning_md = gr.Markdown(
+                    f"<div class='confirm-text'>{warning_text}</div>"
+                )
+                # 按钮区域（在框内）
+                with gr.Row():
+                    confirm_btn = gr.Button(confirm_text, variant="stop", size="sm")
+                    cancel_btn = gr.Button(cancel_text, size="sm")
+        
+        return confirm_row, warning_md, confirm_btn, cancel_btn
+    
+    # 🔑 封装：显示确认对话框
+    def show_confirm_dialog(confirm_row, warning_md, message: str):
+        """显示确认对话框并更新警告信息"""
+        return (
+            gr.update(visible=True),
+            gr.update(value=f"<div style='padding:10px 10px 5px 10px;color:#cf1322;font-weight:bold;'>{message}</div>")
+        )
+    
+    # 🔑 封装：隐藏确认对话框
+    def hide_confirm_dialog(confirm_row, warning_md):
+        """隐藏确认对话框并清空警告信息"""
+        return (
+            gr.update(visible=False),
+            gr.update(value="")
+        )
     
     from pathlib import Path
     projects_dir = Path(PROJECTS_DIR)
@@ -145,8 +184,29 @@ def build_ui():
             import traceback
             logger.error(traceback.format_exc())
     
-    # 使用从 ui.styles 导入的 CSS
-    custom_css = get_custom_css()
+    # 自定义CSS防止确认框被Gradio加载状态覆盖
+    custom_css = """
+    .confirm-box {
+        border: 2px solid #ff4d4f !important;
+        border-radius: 8px !important;
+        background: #fff2f0 !important;
+        padding: 12px !important;
+    }
+    .confirm-box * {
+        border-color: #ff4d4f !important;
+    }
+    .confirm-text {
+        color: #cf1322 !important;
+        font-weight: bold !important;
+        font-size: 14px !important;
+        margin-bottom: 10px !important;
+    }
+    /* 防止Gradio加载状态改变边框颜色 */
+    .confirm-box.generating {
+        border-color: #ff4d4f !important;
+        background: #fff2f0 !important;
+    }
+    """
     
     with gr.Blocks(title="多轨剧本配音工作台") as demo:
         gr.Markdown("# 🎛️ 多轨剧本配音工作台")
