@@ -22,7 +22,11 @@ def _request(method, path, data=None):
         with urllib.request.urlopen(req, timeout=120) as resp:
             return json.loads(resp.read()), resp.status
     except urllib.error.HTTPError as e:
-        return json.loads(e.read()), e.code
+        raw = e.read()
+        try:
+            return json.loads(raw), e.code
+        except (json.JSONDecodeError, ValueError):
+            return {"raw": raw.decode(errors="replace")}, e.code
 
 
 class TestTTSAPI(unittest.TestCase):
