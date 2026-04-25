@@ -4,7 +4,7 @@ Qwen3-TTS 异步 API 服务
 - 单线程排队处理（不并发）
 - 状态查询：pending / processing / success / failed
 - 下载音频文件
-- 输出按日期文件夹管理
+- 输出文件名带日期前缀，统一管理在 output_audio/ 下
 """
 import os
 import sys
@@ -16,7 +16,7 @@ from datetime import datetime
 from queue import Queue
 from pathlib import Path
 
-from flask import Flask, request, jsonify, send_file, abort
+from flask import Flask, request, jsonify, send_file
 
 # ── 日志 ──────────────────────────────────────────────
 logging.basicConfig(
@@ -115,11 +115,9 @@ def worker_loop():
 
             clip = wavs[0] if isinstance(wavs, list) else wavs
 
-            # 按日期存放
-            date_dir = OUTPUT_BASE / datetime.now().strftime("%Y-%m-%d")
-            date_dir.mkdir(parents=True, exist_ok=True)
+            OUTPUT_BASE.mkdir(parents=True, exist_ok=True)
             filename = f"{task_id}.wav"
-            filepath = date_dir / filename
+            filepath = OUTPUT_BASE / filename
             sf.write(str(filepath), clip, sr)
 
             with store_lock:
@@ -158,7 +156,8 @@ def submit_task():
     if not text:
         return jsonify({"error": "text 不能为空"}), 400
 
-    task_id = uuid.uuid4().hex
+    date_prefix = datetime.now().strftime("%Y%m%d")
+    task_id = f"{date_prefix}_{uuid.uuid4().hex}"
     task = {
         "task_id": task_id,
         "text": text,
@@ -210,13 +209,13 @@ def download_audio(task_id):
     with store_lock:
         task = task_store.get(task_id)
     if not task:
-        abort(404, description="task_id 不存在")
+        return jsonify({"error": "task_id 不存在"}), 404
     if task["status"] != "success":
-        abort(404, description=f"任务状态不是 success，当前: {task['status']}")
+        return jsonify({"error": f"任务状态不是 success，当前: {task['status']}"}), 404
 
     filepath = Path(task["file_path"])
     if not filepath.exists():
-        abort(404, description="音频文件不存在，可能已被清理")
+        return jsonify({"error": "音频文件不存在，可能已被清理"}), 404
 
     return send_file(str(filepath), mimetype="audio/wav", as_attachment=True,
                      download_name=f"{task_id}.wav")
