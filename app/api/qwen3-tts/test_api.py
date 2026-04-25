@@ -18,10 +18,16 @@ with open(_CONFIG_PATH, "r", encoding="utf-8") as _f:
 BASE_URL = _cfg.get("api", {}).get("base_url", "http://127.0.0.1:8420")
 
 
+_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+
+
 def _request(method, path, data=None):
     url = BASE_URL + path
     body = json.dumps(data).encode() if data else None
-    headers = {"Content-Type": "application/json"}
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": _UA,
+    }
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=120) as resp:
@@ -32,6 +38,13 @@ def _request(method, path, data=None):
             return json.loads(raw), e.code
         except (json.JSONDecodeError, ValueError):
             return {"raw": raw.decode(errors="replace")}, e.code
+
+
+def _download_file(url, timeout=120):
+    """下载二进制文件，返回 (data, status_code)"""
+    req = urllib.request.Request(url, headers={"User-Agent": _UA})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read(), resp.status
 
 
 class TestTTSAPI(unittest.TestCase):
@@ -111,11 +124,9 @@ class TestTTSAPI(unittest.TestCase):
         self.assertEqual(resp["status"], "success")
 
         download_url = BASE_URL + resp["download_url"]
-        req = urllib.request.Request(download_url)
-        with urllib.request.urlopen(req, timeout=30) as resp_io:
-            data = resp_io.read()
-            self.assertGreater(len(data), 1000)  # 至少 1KB
-            self.assertEqual(resp_io.status, 200)
+        data, dl_code = _download_file(download_url)
+        self.assertEqual(dl_code, 200)
+        self.assertGreater(len(data), 1000)
 
         # 保存到本地验证
         out_path = os.path.join(os.path.dirname(__file__), "test_download.wav")
@@ -182,10 +193,9 @@ class TestTTSAPI(unittest.TestCase):
         for i, tid in enumerate(task_ids):
             r, _ = _request("GET", f"/tts/status/{tid}")
             self.assertEqual(r["status"], "success")
-            req = urllib.request.Request(BASE_URL + r["download_url"])
-            with urllib.request.urlopen(req, timeout=30) as resp_io:
-                data = resp_io.read()
-                self.assertGreater(len(data), 1000)
+            data, dl_code = _download_file(BASE_URL + r["download_url"])
+            self.assertEqual(dl_code, 200)
+            self.assertGreater(len(data), 1000)
             out_path = os.path.join(os.path.dirname(__file__), f"test_role_{i}.wav")
             with open(out_path, "wb") as f:
                 f.write(data)
