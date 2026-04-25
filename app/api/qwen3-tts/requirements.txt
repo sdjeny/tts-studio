@@ -1,0 +1,5 @@
+# Qwen3-TTS API 服务独立依赖
+# 安装：pip install -r requirements.txt
+flask>=3.0
+pyyaml>=6.0
+# qwen_tts、torch、soundfile、torchaudio 等与 test_tts.py 共用环境
