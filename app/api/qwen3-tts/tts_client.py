@@ -14,10 +14,12 @@ Qwen3-TTS API 客户端
             f.write(data)
 """
 import json
+import os
 import time
 import urllib.request
 import urllib.error
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 # ──────────────────────────────────────────────────────
@@ -75,15 +77,55 @@ class DownloadResult:
 # 客户端
 # ──────────────────────────────────────────────────────
 class TtsClient:
-    def __init__(self, base_url: str, timeout: int = _DEFAULT_TIMEOUT,
+    def __init__(self, base_url: str = None, timeout: int = _DEFAULT_TIMEOUT,
                  poll_interval: int = _DEFAULT_POLL_INTERVAL,
                  max_wait: int = _DEFAULT_MAX_WAIT,
-                 user_agent: str = _DEFAULT_UA):
+                 user_agent: str = _DEFAULT_UA,
+                 config_path: str = None):
+        """
+        参数：
+            base_url: 服务地址，不传则自动从 config.yaml 读取
+            timeout: 请求超时（秒）
+            poll_interval: 轮询间隔（秒）
+            max_wait: 最大等待时间（秒）
+            user_agent: User-Agent
+            config_path: config.yaml 路径，不传则自动从模块同级目录查找
+        """
+        if not base_url:
+            base_url = self._load_base_url(config_path)
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.poll_interval = poll_interval
         self.max_wait = max_wait
         self._ua = user_agent
+
+    @classmethod
+    def from_config(cls, config_path: str = None, **kwargs) -> "TtsClient":
+        """
+        从 config.yaml 创建客户端，一行搞定：
+            client = TtsClient.from_config()
+        """
+        return cls(base_url=None, config_path=config_path, **kwargs)
+
+    @staticmethod
+    def _load_base_url(config_path: str = None) -> str:
+        """从 config.yaml 读取 api.base_url"""
+        if config_path is None:
+            # 默认：模块文件所在目录的 config.yaml
+            config_path = Path(__file__).parent / "config.yaml"
+        else:
+            config_path = Path(config_path)
+
+        if not config_path.exists():
+            raise FileNotFoundError(f"config.yaml 不存在: {config_path}")
+
+        import yaml
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+        url = cfg.get("api", {}).get("base_url", "")
+        if not url:
+            raise ValueError(f"config.yaml 中未配置 api.base_url: {config_path}")
+        return url
 
     # ── 内部请求 ──────────────────────────────────────
     def _request(self, method: str, path: str, data: dict = None):

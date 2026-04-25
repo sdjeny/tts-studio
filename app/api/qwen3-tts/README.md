@@ -50,11 +50,22 @@ python server.py
 
 ## 调用示例（tts_client）
 
+**方式一：从 config.yaml 自动读取地址（推荐）**
+```python
+from tts_client import TtsClient
+
+client = TtsClient.from_config()  # 自动读取 config.yaml 中的 api.base_url
+```
+
+**方式二：手动指定地址**
 ```python
 from tts_client import TtsClient
 
 client = TtsClient("http://127.0.0.1:8420")
+```
 
+**完整流程**
+```python
 # 提交任务
 result = client.submit(
     text="你好，欢迎使用语音合成服务。",
@@ -66,7 +77,6 @@ print(result.task_id)  # 如：20260426_abc123...
 # 等待完成
 sr = client.wait(result.task_id)
 if sr.ok:
-    # 下载音频
     dl = client.download(result.task_id)
     with open("output.wav", "wb") as f:
         f.write(dl.data)

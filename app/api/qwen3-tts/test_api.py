@@ -4,17 +4,10 @@ Qwen3-TTS API 服务自动测试
 """
 import os
 import unittest
-import yaml
 
 from tts_client import TtsClient
 
-# 从 config.yaml 读取服务地址
-_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
-with open(_CONFIG_PATH, "r", encoding="utf-8") as _f:
-    _cfg = yaml.safe_load(_f)
-BASE_URL = _cfg.get("api", {}).get("base_url", "http://127.0.0.1:8420")
-
-client = TtsClient(BASE_URL)
+client = TtsClient.from_config()
 
 
 class TestTTSAPI(unittest.TestCase):
