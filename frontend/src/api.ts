@@ -52,6 +52,8 @@ export interface AudioRecord {
   error?: string;
   raw?: boolean;
   duration?: number;
+  interrupted?: boolean;
+  task_id?: string;
 }
 
 export interface Dialogue {

@@ -289,6 +289,8 @@ function DialogueRow({ dlg, index, onGenerate, onClearHistory, onDownload, onDel
           <button onClick={onGenerate} style={{ ...btnBlue, padding: "3px 10px", fontSize: 12 }}>
             {currentAudio ? "🔄 重新生成" : "🔊 生成音频"}
           </button>
+        ) : dlg.audio_history?.some(a => a.status === "generating" && a.interrupted) ? (
+          <span style={{ color: "#f97316", fontSize: 12 }}>⚡ 中断，点击刷新重试</span>
         ) : (
           <span style={{ color: "#f59e0b", fontSize: 12 }}>⏳ 生成中...</span>
         )}
@@ -333,7 +335,11 @@ function DialogueRow({ dlg, index, onGenerate, onClearHistory, onDownload, onDel
                   <button onClick={() => onDownload(ah.id)} style={{ ...btnGhost, padding: "1px 6px", fontSize: 11 }}>⬇</button>
                 </>
               ) : ah.status === "generating" ? (
-                <span style={{ color: "#f59e0b", fontSize: 11, fontStyle: "italic" }}>⏳ 生成中...</span>
+                ah.interrupted ? (
+                  <span style={{ color: "#f97316", fontSize: 11, fontStyle: "italic" }}>⚡ 中断，点击刷新重试{ah.error ? ` (${ah.error})` : ""}</span>
+                ) : (
+                  <span style={{ color: "#f59e0b", fontSize: 11, fontStyle: "italic" }}>⏳ 生成中...</span>
+                )
               ) : (
                 <span style={{ color: "#ef4444", fontSize: 11, fontStyle: "italic" }}>❌ {ah.error || "生成失败"}</span>
               )}

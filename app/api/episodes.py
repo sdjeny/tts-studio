@@ -255,8 +255,8 @@ async def _download_and_save(project_id: str, episode_id: str, dialogue_id: str,
                         break
                 break
     except Exception as e:
-        # Mark as failed
-        fail_id = f"failed_{uuid.uuid4().hex[:8]}"
+        # 系统端异常（超时/网络/下载失败）→ 保持 generating 状态，等用户刷新重试
+        # 只有 TTS 服务器明确返回 failed 才算真正失败（在 check_tts_status 里判断）
         data = store._read()
         for p in data["projects"]:
             if p["id"] == project_id:
@@ -264,19 +264,13 @@ async def _download_and_save(project_id: str, episode_id: str, dialogue_id: str,
                     if ep_in["id"] == episode_id:
                         for d in ep_in["dialogues"]:
                             if d["id"] == dialogue_id:
-                                d["audio_history"] = [
-                                    a for a in d["audio_history"]
-                                    if a.get("id") != placeholder_id
-                                ]
-                                d["audio_history"].append({
-                                    "id": fail_id,
-                                    "url": "",
-                                    "filename": "",
-                                    "created_at": _now(),
-                                    "error": f"TTS错误: {e}",
-                                })
-                                d["current_audio_id"] = fail_id
-                                d["status"] = "failed"
+                                # 更新占位记录：保留 task_id，标记 interrupted 便于前端提示
+                                for a in d["audio_history"]:
+                                    if a.get("id") == placeholder_id:
+                                        a["interrupted"] = True
+                                        a["error"] = str(e)
+                                        break
+                                d["status"] = "generating"
                                 store._write(data)
                                 return
                         break
@@ -339,8 +333,8 @@ async def api_generate_audio(project_id: str, episode_id: str, dialogue_id: str)
             pitch=char.get("pitch", 1.0),
         )
     except Exception as e:
-        # Submit failed → write failed record immediately
-        fail_id = f"failed_{uuid.uuid4().hex[:8]}"
+        # Submit 失败（网络/TTS服务不可用）→ 写 interrupted 占位，等刷新时重新提交
+        interrupt_id = f"gen_{uuid.uuid4().hex[:8]}"
         data = store._read()
         for p in data["projects"]:
             if p["id"] == project_id:
@@ -349,14 +343,16 @@ async def api_generate_audio(project_id: str, episode_id: str, dialogue_id: str)
                         for d in ep_in["dialogues"]:
                             if d["id"] == dialogue_id:
                                 d["audio_history"].append({
-                                    "id": fail_id,
+                                    "id": interrupt_id,
                                     "url": "",
                                     "filename": "",
                                     "created_at": _now(),
-                                    "error": f"TTS错误: {e}",
+                                    "status": "generating",
+                                    "interrupted": True,
+                                    "error": str(e),
                                 })
-                                d["current_audio_id"] = fail_id
-                                d["status"] = "failed"
+                                d["current_audio_id"] = interrupt_id
+                                d["status"] = "generating"
                                 store._write(data)
                                 return d
                         break
@@ -493,83 +489,8 @@ async def api_refresh_dialogue(project_id: str, episode_id: str, dialogue_id: st
     if not dlg:
         raise HTTPException(404, "Dialogue not found")
 
-    # 检查 generating 状态的占位记录，查一次 TTS 状态
-    for ah in dlg.get("audio_history", []):
-        if ah.get("status") == "generating" and not ah.get("url"):
-            task_id = ah.get("task_id", "")
-            if task_id:
-                try:
-                    result = await check_tts_status(task_id)
-                    if result["status"] == "success":
-                        client = get_client()
-                        loop = asyncio.get_event_loop()
-                        def _dl():
-                            return client.download(task_id)
-                        dl_result = await loop.run_in_executor(None, _dl)
-                        if dl_result.ok:
-                            filename = f"{task_id}.wav"
-                            filepath = AUDIO_DIR / filename
-                            with open(filepath, "wb") as f:
-                                f.write(dl_result.data)
-                            audio_url = f"/static/audio/{filename}"
-                            real_id = f"audio_{uuid.uuid4().hex[:8]}"
-                            data = store._read()
-                            for p in data["projects"]:
-                                if p["id"] == project_id:
-                                    for ep_in in p["episodes"]:
-                                        if ep_in["id"] == episode_id:
-                                            for d in ep_in["dialogues"]:
-                                                if d["id"] == dialogue_id:
-                                                    d["audio_history"] = [
-                                                        a for a in d["audio_history"]
-                                                        if a.get("id") != ah["id"]
-                                                    ]
-                                                    d["audio_history"].append({
-                                                        "id": real_id,
-                                                        "url": audio_url,
-                                                        "filename": filename,
-                                                        "created_at": _now(),
-                                                        "raw": True,
-                                                        "duration": _audio_duration(str(filepath)),
-                                                    })
-                                                    d["current_audio_id"] = real_id
-                                                    d["status"] = "completed"
-                                                    store._write(data)
-                                                    break
-                                            break
-                                    break
-                            return get_episode(project_id, episode_id)
-                    elif result["status"] == "failed":
-                        ah["status"] = "failed"
-                        ah["error"] = result["error"] or "TTS 任务失败"
-                        data = store._read()
-                        for p in data["projects"]:
-                            if p["id"] == project_id:
-                                for ep_in in p["episodes"]:
-                                    if ep_in["id"] == episode_id:
-                                        for d in ep_in["dialogues"]:
-                                            if d["id"] == dialogue_id:
-                                                store._write(data)
-                                                break
-                                        break
-                                break
-                except Exception:
-                    pass
-
-    # 修复磁盘上已丢失的文件记录
-    fixed = []
-    for ah in dlg.get("audio_history", []):
-        fn = ah.get("filename", "")
-        if not fn:
-            continue
-        fp = AUDIO_DIR / fn
-        url = ah.get("url", "")
-        if not fp.exists() and not url:
-            ah["status"] = "failed"
-            ah["error"] = "生成中途中断，文件丢失"
-            fixed.append(ah["id"])
-
-    if fixed:
+    def _replace_placeholder(placeholder, real_record):
+        """Helper: 替换占位记录为真实记录"""
         data = store._read()
         for p in data["projects"]:
             if p["id"] == project_id:
@@ -577,10 +498,145 @@ async def api_refresh_dialogue(project_id: str, episode_id: str, dialogue_id: st
                     if ep_in["id"] == episode_id:
                         for d in ep_in["dialogues"]:
                             if d["id"] == dialogue_id:
+                                d["audio_history"] = [
+                                    a for a in d["audio_history"]
+                                    if a.get("id") != placeholder["id"]
+                                ]
+                                d["audio_history"].append(real_record)
+                                d["current_audio_id"] = real_record["id"]
+                                d["status"] = "completed"
                                 store._write(data)
-                                break
+                                return
                         break
                 break
+
+    async def _try_download_audio(task_id, placeholder):
+        """查 TTS 状态 → 下载 → 保存。
+        TTS 服务器返回 failed → 写 failed 状态（真正的失败）。
+        网络/系统异常 → 保持 generating，等下次刷新重试。
+        返回 True 表示已处理（成功或明确失败），False 表示未完成。
+        """
+        try:
+            result = await check_tts_status(task_id)
+            if result["status"] in ("pending", "processing"):
+                return False  # 还没完成，等下次刷新
+            if result["status"] == "failed":
+                # TTS 服务器明确返回失败 → 这才是真正的失败
+                data = store._read()
+                for p in data["projects"]:
+                    if p["id"] == project_id:
+                        for ep_in in p["episodes"]:
+                            if ep_in["id"] == episode_id:
+                                for d in ep_in["dialogues"]:
+                                    if d["id"] == dialogue_id:
+                                        d["audio_history"] = [
+                                            a for a in d["audio_history"]
+                                            if a.get("id") != placeholder["id"]
+                                        ]
+                                        d["audio_history"].append({
+                                            "id": f"failed_{uuid.uuid4().hex[:8]}",
+                                            "url": "",
+                                            "filename": "",
+                                            "created_at": _now(),
+                                            "status": "failed",
+                                            "error": result["error"] or "TTS 任务失败",
+                                        })
+                                        d["status"] = "failed"
+                                        store._write(data)
+                                        return True
+                                break
+                        break
+                return True
+            # success → 下载
+            client = get_client()
+            loop = asyncio.get_event_loop()
+            dl_result = await loop.run_in_executor(None, lambda: client.download(task_id))
+            if not dl_result.ok:
+                # 下载失败是系统异常，不写 failed，保持 generating 等重试
+                return False
+            filename = f"{task_id}.wav"
+            filepath = AUDIO_DIR / filename
+            with open(filepath, "wb") as f:
+                f.write(dl_result.data)
+            real_id = f"audio_{uuid.uuid4().hex[:8]}"
+            _replace_placeholder(placeholder, {
+                "id": real_id,
+                "url": f"/static/audio/{filename}",
+                "filename": filename,
+                "created_at": _now(),
+                "raw": True,
+                "duration": _audio_duration(str(filepath)),
+            })
+            return True
+        except Exception:
+            # 网络/系统异常 → 不写失败，保持 generating，等下次刷新重试
+            return False
+
+    # 1. 处理 generating 状态的占位记录（包括 interrupted 的）
+    for ah in dlg.get("audio_history", []):
+        if ah.get("status") != "generating" or ah.get("url"):
+            continue
+        task_id = ah.get("task_id", "")
+        if task_id:
+            # 有 task_id → 查 TTS 状态
+            done = await _try_download_audio(task_id, ah)
+            if done:
+                return get_episode(project_id, episode_id)
+        else:
+            # 没有 task_id（submit 阶段就中断了）→ 重新提交
+            try:
+                voice_id = _safe_voice_id(char.get("voice_id", "aiden"))
+                new_task_id = await submit_tts(
+                    text=dlg["text"],
+                    speaker=voice_id,
+                    instruct=dlg.get("instruct", ""),
+                    speed=char.get("speed", 1.0),
+                    pitch=char.get("pitch", 1.0),
+                )
+                data = store._read()
+                for p in data["projects"]:
+                    if p["id"] == project_id:
+                        for ep_in in p["episodes"]:
+                            if ep_in["id"] == episode_id:
+                                for d in ep_in["dialogues"]:
+                                    if d["id"] == dialogue_id:
+                                        for a in d["audio_history"]:
+                                            if a.get("id") == ah["id"]:
+                                                a["task_id"] = new_task_id
+                                                a["interrupted"] = False
+                                                a["error"] = ""
+                                                break
+                                        store._write(data)
+                                        break
+                                break
+                        break
+            except Exception:
+                pass  # 提交失败，保持 generating，等下次刷新
+
+    # 2. 修复磁盘上已丢失的文件记录（文件丢了但状态不是 failed 的 → 重新生成）
+    for ah in dlg.get("audio_history", []):
+        fn = ah.get("filename", "")
+        if not fn:
+            continue
+        fp = AUDIO_DIR / fn
+        url = ah.get("url", "")
+        if not fp.exists() and not url and ah.get("status") != "failed":
+            # 文件丢失且不是已标记失败的 → 标记 interrupted，等刷新重试
+            ah["interrupted"] = True
+            ah["error"] = "文件丢失，等待重试"
+
+    # 写回 interrupted 标记
+    data = store._read()
+    for p in data["projects"]:
+        if p["id"] == project_id:
+            for ep_in in p["episodes"]:
+                if ep_in["id"] == episode_id:
+                    for d in ep_in["dialogues"]:
+                        if d["id"] == dialogue_id:
+                            store._write(data)
+                            break
+                    break
+            break
 
     return get_episode(project_id, episode_id)
 
