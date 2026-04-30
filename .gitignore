@@ -40,10 +40,14 @@ ENV/
 
 # API 服务配置（含本地路径，不提交）
 app/api/qwen3-tts/config.yaml
+app/config.yaml
+app/memory_proxy/config.yaml
+*.yaml
 
 # 测试产物
 app/api/qwen3-tts/test_output/
 app/api/qwen3-tts/server.log
+test_*.py
 
 # 测试输出
 test_*.txt

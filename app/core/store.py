@@ -1,0 +1,441 @@
+"""JSON file-based persistence layer."""
+import json
+import uuid
+import time
+import os
+import copy
+from pathlib import Path
+from typing import Any
+
+DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+DATA_FILE = DATA_DIR / "studio.json"
+
+
+def _ensure_data_dir():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    if not DATA_FILE.exists():
+        _write({"projects": []})
+
+
+def _read() -> dict:
+    _ensure_data_dir()
+    if not DATA_FILE.exists():
+        _write({"projects": []})
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _write(data: dict):
+    tmp = str(DATA_FILE) + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    # Windows 下 os.replace 可能因文件锁定而失败，加重试
+    for attempt in range(5):
+        try:
+            os.replace(tmp, str(DATA_FILE))
+            return
+        except PermissionError:
+            if attempt == 4:
+                raise
+            time.sleep(0.5 * (attempt + 1))
+    # 清理临时文件
+    try:
+        os.remove(tmp)
+    except OSError:
+        pass
+
+
+def _now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def _uid() -> str:
+    return uuid.uuid4().hex[:12]
+
+
+# ─── Projects ────────────────────────────────────────────────
+
+def list_projects() -> list[dict]:
+    return _read()["projects"]
+
+
+def get_project(project_id: str) -> dict | None:
+    for p in _read()["projects"]:
+        if p["id"] == project_id:
+            return p
+    return None
+
+
+def create_project(name: str) -> dict:
+    _ensure_data_dir()
+    data = _read()
+    project = {
+        "id": _uid(),
+        "name": name,
+        "created_at": _now(),
+        "characters": [],
+        "episodes": [],
+    }
+    data["projects"].append(project)
+    _write(data)
+    return project
+
+
+def update_project(project_id: str, name: str) -> dict | None:
+    data = _read()
+    for p in data["projects"]:
+        if p["id"] == project_id:
+            p["name"] = name
+            _write(data)
+            return p
+    return None
+
+
+def delete_project(project_id: str) -> bool:
+    data = _read()
+    projects = [p for p in data["projects"] if p["id"] != project_id]
+    if len(projects) == len(data["projects"]):
+        return False
+    data["projects"] = projects
+    _write(data)
+    return True
+
+
+# ─── Characters ──────────────────────────────────────────────
+
+def project_characters(project_id: str) -> list[dict]:
+    p = get_project(project_id)
+    return p["characters"] if p else []
+
+
+def add_character(project_id: str, name: str, voice_id: str, speed: float = 1.0,
+                  pitch: float = 1.0, description: str = "",
+                  audio_effects: list | None = None, **extra) -> dict | None:
+    data = _read()
+    for p in data["projects"]:
+        if p["id"] == project_id:
+            char = {
+                "id": _uid(),
+                "name": name,
+                "voice_id": voice_id,
+                "speed": speed,
+                "pitch": pitch,
+                "description": description,
+                "audio_effects": audio_effects or [],
+                "created_at": _now(),
+            }
+            char.update(extra)
+            p["characters"].append(char)
+            _write(data)
+            return char
+    return None
+
+
+def update_character(project_id: str, char_id: str, **fields) -> dict | None:
+    data = _read()
+    for p in data["projects"]:
+        if p["id"] == project_id:
+            for c in p["characters"]:
+                if c["id"] == char_id:
+                    c.update(fields)
+                    _write(data)
+                    return c
+    return None
+
+
+def delete_character(project_id: str, char_id: str) -> bool:
+    data = _read()
+    for p in data["projects"]:
+        if p["id"] == project_id:
+            before = len(p["characters"])
+            p["characters"] = [c for c in p["characters"] if c["id"] != char_id]
+            if len(p["characters"]) < before:
+                _write(data)
+                return True
+    return False
+
+
+# ─── Episodes ────────────────────────────────────────────────
+
+def project_episodes(project_id: str) -> list[dict]:
+    p = get_project(project_id)
+    return p["episodes"] if p else []
+
+
+def get_episode(project_id: str, episode_id: str) -> dict | None:
+    p = get_project(project_id)
+    if not p:
+        return None
+    for ep in p["episodes"]:
+        if ep["id"] == episode_id:
+            return ep
+    return None
+
+
+def create_episode(project_id: str, title: str) -> dict | None:
+    data = _read()
+    for p in data["projects"]:
+        if p["id"] == project_id:
+            ep = {
+                "id": _uid(),
+                "title": title,
+                "summary": "",
+                "created_at": _now(),
+                "dialogues": [],
+            }
+            p["episodes"].append(ep)
+            _write(data)
+            return ep
+    return None
+
+
+def update_episode(project_id: str, episode_id: str, **fields) -> dict | None:
+    data = _read()
+    for p in data["projects"]:
+        if p["id"] == project_id:
+            for ep in p["episodes"]:
+                if ep["id"] == episode_id:
+                    ep.update(fields)
+                    _write(data)
+                    return ep
+    return None
+
+
+def delete_episode(project_id: str, episode_id: str) -> bool:
+    data = _read()
+    for p in data["projects"]:
+        if p["id"] == project_id:
+            before = len(p["episodes"])
+            p["episodes"] = [ep for ep in p["episodes"] if ep["id"] != episode_id]
+            if len(p["episodes"]) < before:
+                _write(data)
+                return True
+    return False
+
+
+# ─── Dialogues ───────────────────────────────────────────────
+
+def episode_dialogues(project_id: str, episode_id: str) -> list[dict]:
+    ep = get_episode(project_id, episode_id)
+    return ep["dialogues"] if ep else []
+
+
+def add_dialogue(project_id: str, episode_id: str, character_id: str,
+                 text: str, order: int = 0, instruct: str = "") -> dict | None:
+    data = _read()
+    for p in data["projects"]:
+        if p["id"] == project_id:
+            for ep in p["episodes"]:
+                if ep["id"] == episode_id:
+                    # resolve character name
+                    char_name = ""
+                    # 特殊内置角色
+                    if character_id == "__旁白__":
+                        char_name = "旁白"
+                    elif character_id == "__场景__":
+                        char_name = "场景"
+                    else:
+                        for c in p["characters"]:
+                            if c["id"] == character_id:
+                                char_name = c["name"]
+                                break
+                    if not char_name:
+                        char_id_display = character_id[:8] if character_id else "(空)"
+                        char_name = f"⚠ 角色异常({char_id_display})"
+                    dlg = {
+                        "id": _uid(),
+                        "character_id": character_id,
+                        "character_name": char_name,
+                        "text": text,
+                        "summary": "",
+                        "instruct": instruct,
+                        "order": order,
+                        "status": "pending",  # pending | generating | completed | failed
+                        "audio_history": [],   # [{id, url, filename, created_at}]
+                        "current_audio_id": None,
+                        "created_at": _now(),
+                    }
+                    ep["dialogues"].append(dlg)
+                    _write(data)
+                    return dlg
+    return None
+
+
+def update_dialogue(project_id: str, episode_id: str, dialogue_id: str, **fields) -> dict | None:
+    data = _read()
+    for p in data["projects"]:
+        if p["id"] == project_id:
+            for ep in p["episodes"]:
+                if ep["id"] == episode_id:
+                    for dlg in ep["dialogues"]:
+                        if dlg["id"] == dialogue_id:
+                            dlg.update(fields)
+                            _write(data)
+                            return dlg
+    return None
+
+# Helper: update only status
+def update_dialogue_status(project_id: str, episode_id: str, dialogue_id: str,
+                           status: str) -> dict | None:
+    return update_dialogue(project_id, episode_id, dialogue_id, status=status)
+
+
+def delete_dialogue(project_id: str, episode_id: str, dialogue_id: str) -> bool:
+    data = _read()
+    for p in data["projects"]:
+        if p["id"] == project_id:
+            for ep in p["episodes"]:
+                if ep["id"] == episode_id:
+                    before = len(ep["dialogues"])
+                    ep["dialogues"] = [d for d in ep["dialogues"] if d["id"] != dialogue_id]
+                    if len(ep["dialogues"]) < before:
+                        _write(data)
+                        return True
+    return False
+
+
+def delete_dialogue_and_audio_files(project_id: str, episode_id: str, dialogue_id: str) -> tuple[bool, int]:
+    """删除对白及其所有关联的音频文件（磁盘 + 历史记录）。返回 (是否成功, 删除文件数)。"""
+    audio_dir = DATA_DIR / "audio"
+    deleted_files = 0
+    data = _read()
+    for p in data["projects"]:
+        if p["id"] == project_id:
+            for ep in p["episodes"]:
+                if ep["id"] == episode_id:
+                    for dlg in ep["dialogues"]:
+                        if dlg["id"] == dialogue_id:
+                            # 删除磁盘上的音频文件
+                            for ah in dlg.get("audio_history", []):
+                                fn = ah.get("filename", "")
+                                if fn:
+                                    fp = audio_dir / fn
+                                    try:
+                                        if fp.exists():
+                                            os.remove(str(fp))
+                                            deleted_files += 1
+                                    except OSError:
+                                        pass
+                            # 从对白列表中移除
+                            ep["dialogues"] = [d for d in ep["dialogues"] if d["id"] != dialogue_id]
+                            _write(data)
+                            return True, deleted_files
+    return False, 0
+
+
+def delete_episode_all_dialogues(project_id: str, episode_id: str) -> tuple[bool, int, int]:
+    """删除剧集所有对白及其关联音频文件。返回 (是否成功, 删除对白数, 删除文件数)。"""
+    audio_dir = DATA_DIR / "audio"
+    data = _read()
+    for p in data["projects"]:
+        if p["id"] == project_id:
+            for ep in p["episodes"]:
+                if ep["id"] == episode_id:
+                    dialogues = ep.get("dialogues", [])
+                    deleted_files = 0
+                    for dlg in dialogues:
+                        for ah in dlg.get("audio_history", []):
+                            fn = ah.get("filename", "")
+                            if fn:
+                                fp = audio_dir / fn
+                                try:
+                                    if fp.exists():
+                                        os.remove(str(fp))
+                                        deleted_files += 1
+                                except OSError:
+                                    pass
+                    dlg_count = len(dialogues)
+                    ep["dialogues"] = []
+                    _write(data)
+                    return True, dlg_count, deleted_files
+    return False, 0, 0
+
+
+def add_audio_to_history(project_id: str, episode_id: str, dialogue_id: str,
+                         audio_url: str, filename: str = "") -> dict | None:
+    """Add a new audio entry to a dialogue's history and set as current."""
+    data = _read()
+    for p in data["projects"]:
+        if p["id"] == project_id:
+            for ep in p["episodes"]:
+                if ep["id"] == episode_id:
+                    for dlg in ep["dialogues"]:
+                        if dlg["id"] == dialogue_id:
+                            entry = {
+                                "id": _uid(),
+                                "url": audio_url,
+                                "filename": filename or audio_url.split("/")[-1],
+                                "created_at": _now(),
+                            }
+                            dlg["audio_history"].append(entry)
+                            dlg["current_audio_id"] = entry["id"]
+                            dlg["status"] = "completed"
+                            _write(data)
+                            return dlg
+    return None
+
+
+def set_current_audio(project_id: str, episode_id: str, dialogue_id: str, audio_id: str) -> dict | None:
+    """Set a specific audio entry as the current (active) audio."""
+    data = _read()
+    for p in data["projects"]:
+        if p["id"] == project_id:
+            for ep in p["episodes"]:
+                if ep["id"] == episode_id:
+                    for dlg in ep["dialogues"]:
+                        if dlg["id"] == dialogue_id:
+                            # Verify the audio_id exists in history
+                            ids = [a["id"] for a in dlg.get("audio_history", [])]
+                            if audio_id not in ids:
+                                return None
+                            dlg["current_audio_id"] = audio_id
+                            dlg["status"] = "completed"
+                            _write(data)
+                            return dlg
+    return None
+
+
+def remove_audio_from_history(project_id: str, episode_id: str, dialogue_id: str, audio_id: str) -> dict | None:
+    """Remove a single audio entry from history. If it was the current audio, fall back to the most recent remaining."""
+    data = _read()
+    for p in data["projects"]:
+        if p["id"] == project_id:
+            for ep in p["episodes"]:
+                if ep["id"] == episode_id:
+                    for dlg in ep["dialogues"]:
+                        if dlg["id"] == dialogue_id:
+                            history = dlg.get("audio_history", [])
+                            # Remove the entry
+                            dlg["audio_history"] = [a for a in history if a["id"] != audio_id]
+                            # If we deleted the current audio, fall back to the last one
+                            if dlg.get("current_audio_id") == audio_id:
+                                if dlg["audio_history"]:
+                                    dlg["current_audio_id"] = dlg["audio_history"][-1]["id"]
+                                else:
+                                    dlg["current_audio_id"] = None
+                                    dlg["status"] = "pending"
+                            _write(data)
+                            return dlg
+    return None
+
+
+def clear_audio_history(project_id: str, episode_id: str, dialogue_id: str) -> dict | None:
+    """Clear all audio history for a dialogue."""
+    data = _read()
+    for p in data["projects"]:
+        if p["id"] == project_id:
+            for ep in p["episodes"]:
+                if ep["id"] == episode_id:
+                    for dlg in ep["dialogues"]:
+                        if dlg["id"] == dialogue_id:
+                            dlg["audio_history"] = []
+                            dlg["current_audio_id"] = None
+                            dlg["status"] = "pending"
+                            _write(data)
+                            return dlg
+    return None
+
+
+def update_dialogue_status(project_id: str, episode_id: str, dialogue_id: str,
+                           status: str) -> dict | None:
+    return update_dialogue(project_id, episode_id, dialogue_id, status=status)

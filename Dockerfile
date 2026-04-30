@@ -10,18 +10,8 @@ RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debia
     sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        ffmpeg \
-        libavcodec-extra \
-        libavdevice-dev \
-        libavfilter-dev \
-        libavformat-dev \
-        libavutil-dev \
-        libpostproc-dev \
-        libswresample-dev \
-        libswscale-dev \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+    apt-get install -y --no-install-recommends ffmpeg nodejs npm && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -33,18 +23,18 @@ RUN mkdir -p /root/.pip && \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ -r requirements.txt
 
-RUN mkdir -p /app/data/projects /app/data/audio /app/data/tmp
+# Build frontend
+COPY frontend/ ./frontend/
+RUN cd frontend && npm install && npm run build
 
-# ARG UID=1000
-# ARG GID=1000
+# Copy backend
+COPY app/ ./app/
 
-# 以 root 运行，简化权限问题
-# RUN addgroup --system --gid $GID appgroup && \
-#     adduser --system --uid $UID --gid $GID appuser && \
-#     chown -R appuser:appgroup /app
+RUN mkdir -p /app/data/audio
 
-# USER appuser
+EXPOSE 8000
 
-EXPOSE 7860
+ENV DATA_DIR=/app/data
+ENV TTS_API_BASE=http://host.docker.internal:8001
 
-CMD ["python", "-m", "app.main"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
