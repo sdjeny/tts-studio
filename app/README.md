@@ -171,6 +171,37 @@ TTS 生成是异步的：`generate` 立即返回 `status: "generating"`，后台
 | GET | `/api/projects/{id}/export` | 导出整个项目 |
 | POST | `/api/projects/{id}/import` | 导入项目 |
 
+### 多轨时间线编辑
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/projects/{id}/episodes/{eid}/timeline/assemble` | 从对白自动装配时间线 |
+| GET | `/api/projects/{id}/episodes/{eid}/timeline` | 获取时间线 |
+| POST | `/api/projects/{id}/episodes/{eid}/timeline/clips` | 添加片段 |
+| PUT | `/api/projects/{id}/episodes/{eid}/timeline/clips/{cid}` | 更新片段 |
+| DELETE | `/api/projects/{id}/episodes/{eid}/timeline/clips/{cid}` | 删除片段 |
+| POST | `/api/projects/{id}/episodes/{eid}/timeline/clips/{cid}/duplicate` | 复制片段 |
+| POST | `/api/projects/{id}/episodes/{eid}/timeline/clips/{cid}/split` | 分割片段 |
+| POST | `/api/projects/{id}/episodes/{eid}/timeline/tracks` | 添加轨道 |
+| PUT | `/api/projects/{id}/episodes/{eid}/timeline/tracks/{tid}` | 更新轨道 |
+| DELETE | `/api/projects/{id}/episodes/{eid}/timeline/tracks/{tid}` | 删除轨道 |
+| POST | `/api/projects/{id}/episodes/{eid}/timeline/import-audio` | 导入音频文件 |
+| POST | `/api/projects/{id}/episodes/{eid}/timeline/normalize` | 音量一致化 |
+| POST | `/api/projects/{id}/episodes/{eid}/timeline/export` | 混音导出 |
+| GET | `/api/projects/{id}/episodes/{eid}/timeline/preview` | 预览播放流 |
+| POST | `/api/projects/{id}/episodes/{eid}/timeline/snapshot` | 保存快照 |
+| GET | `/api/projects/{id}/episodes/{eid}/timeline/snapshots` | 列快照 |
+| POST | `/api/projects/{id}/episodes/{eid}/timeline/snapshots/{v}/restore` | 恢复快照 |
+
+**时间线设计**：
+- 借鉴 voicebox 的 Story/StoryItem 模型
+- 每个剧集的时间线包含轨道（tracks）和片段（clips）
+- 片段引用对白音频或导入的音频文件
+- 非破坏性编辑：裁剪/音量/淡入淡出都是元数据，原始音频文件不变
+- 默认将所有对白音频按顺序排列到同一轨道
+- 支持多轨混音、音量一致化、交叉淡化
+- 编辑状态保存在 `episode.timeline` JSON 中
+
 ## 数据存储
 
 - 所有项目/剧集/对白数据存储在 `data/studio.json`
@@ -184,3 +215,4 @@ TTS 生成是异步的：`generate` 立即返回 `status: "generating"`，后台
 - TTS 服务需要配置 `TTS_API_KEY` 环境变量
 - 前端构建后需重启 FastAPI 才能 serve 最新产物
 - `refresh` 接口返回的是**整个剧集**对象，需从中提取目标对白
+- Windows 下 uvicorn 推荐使用 `--reload`（自动使用 WatchFiles），避免 StatReload 子进程模块加载问题

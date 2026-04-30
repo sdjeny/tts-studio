@@ -1,0 +1,394 @@
+import { useState, useRef } from "react";
+import { api, Project } from "../api";
+import DialogueList from "./DialogueList";
+import Timeline from "./Timeline";
+
+/** 从项目所有对白中提取去重后的角色名（不含旁白/场景） */
+function extractAllCharNames(project: Project): string[] {
+  const names = new Set<string>();
+  for (const ep of project.episodes) {
+    for (const dlg of ep.dialogues || []) {
+      const n = (dlg.character_name || "").trim();
+      if (n && n !== "旁白" && n !== "场景") names.add(n);
+    }
+  }
+  return Array.from(names).sort();
+}
+
+export default function EpisodePanel({ project, onChange, onError }: {
+  project: Project; onChange: () => void; onError: (m: string) => void;
+}) {
+  const [title, setTitle] = useState("");
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [batchMode, setBatchMode] = useState<"pending" | "all">("pending");
+  const [loading, setLoading] = useState(false);
+  const importFileInputRef = useRef<HTMLInputElement>(null);
+
+  // 批量换角 state
+  const [showBatchReplace, setShowBatchReplace] = useState(false);
+  const [batchOldName, setBatchOldName] = useState("");
+  const [batchNewName, setBatchNewName] = useState("");
+  const [batchEpIds, setBatchEpIds] = useState<Set<string>>(new Set());
+
+  const add = async () => {
+    if (!title.trim()) return;
+    try {
+      await api.createEpisode(project.id, title.trim());
+      setTitle("");
+      onChange();
+    } catch (e: any) { onError(e.message); }
+  };
+
+  const remove = async (eid: string) => {
+    if (!confirm("删除该剧集及其所有对白？")) return;
+    try { await api.deleteEpisode(project.id, eid); onChange(); }
+    catch (e: any) { onError(e.message); }
+  };
+
+  const dlAll = (eid: string) => {
+    window.open(api.downloadEpisodeAll(project.id, eid), "_blank");
+  };
+
+  const batchGenerate = async (ep: Project["episodes"][0]) => {
+    const targets = batchMode === "all"
+      ? ep.dialogues
+      : ep.dialogues.filter((d: any) => !d.current_audio_id);
+
+    if (targets.length === 0) {
+      onError(batchMode === "all" ? "✅ 没有可生成的对白" : "✅ 所有对白已有音频，无需生成");
+      return;
+    }
+
+    const label = batchMode === "all" ? "全部重新生成" : "仅生成未生成过的";
+    if (!confirm(`[${label}] 对 ${targets.length} 条对白生成音频？`)) return;
+
+    let count = 0;
+    for (const d of targets) {
+      try {
+        await api.generateAudio(project.id, ep.id, d.id);
+        count++;
+      } catch (e: any) {
+        onError(e.message);
+        break;
+      }
+    }
+    onChange();
+    if (count > 0) {
+      onError(`✅ 已提交 ${count}/${targets.length} 条，正在后台生成中...`);
+    }
+  };
+
+  const exportEpisode = async (ep: Project["episodes"][0]) => {
+    try {
+      const data = await api.exportEpisode(project.id, ep.id);
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${ep.title}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e: any) { onError(e.message); }
+  };
+
+  const importDialogues = async (epId: string) => {
+    const input = importFileInputRef.current;
+    if (!input) return;
+    input.onchange = async (e: any) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const data = JSON.parse(text);
+        const dialogues = data.dialogues || data;
+        const items = Array.isArray(dialogues) ? dialogues : [dialogues];
+        await api.importDialogues(project.id, epId, {
+          title: data.title || "",
+          dialogues: items.map((d: any) => ({
+            character_id: d.character_id || "",
+            text: d.text || "",
+            instruct: d.instruct || "",
+            order: d.order || 0,
+          })),
+        });
+        onChange();
+        onError(`✅ 成功导入 ${items.length} 条对白`);
+      } catch (err: any) {
+        onError(`导入失败: ${err.message}`);
+      }
+      input.value = "";
+    };
+    input.click();
+  };
+
+  return (
+    <div>
+      <input ref={importFileInputRef} type="file" accept=".json" style={{ display: "none" }} />
+
+      {/* 添加剧集 */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        <input
+          placeholder="剧集标题（如：第一集）" value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && add()}
+          style={{ flex: 1, padding: "9px 14px", background: "#1e293b", border: "1px solid #334155", borderRadius: 8, color: "#e2e8f0", fontSize: 14, outline: "none" }}
+        />
+        <button onClick={add} style={{ padding: "9px 20px", background: "#3b82f6", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 600 }}>
+          + 新建剧集
+        </button>
+      </div>
+
+      {/* 批量换角工具栏 */}
+      {project.episodes.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <button
+            onClick={() => setShowBatchReplace(!showBatchReplace)}
+            style={{ ...smallBtn, color: batchOldName ? "#f59e0b" : "#94a3b8", borderColor: batchOldName ? "#78350f" : "#334155" }}
+          >
+            🔄 批量换角 {showBatchReplace ? "▾" : "▸"}
+          </button>
+          {showBatchReplace && (
+            <div style={{
+              marginTop: 8, padding: 14, background: "#1c1917", border: "1px solid #78350f",
+              borderRadius: 8, display: "grid", gap: 10,
+            }}>
+              <div style={{ fontSize: 13, color: "#fbbf24", fontWeight: 600 }}>
+                🔄 批量换角 — 将选中章节里的某个角色替换为另一个角色
+              </div>
+              {/* 角色选择 */}
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <span style={{ fontSize: 12, color: "#94a3b8" }}>将</span>
+                {batchOldName ? (
+                  <select value={batchOldName} onChange={e => setBatchOldName(e.target.value)} style={{ ...inputSm, minWidth: 100 }}>
+                    <option value="">选择角色…</option>
+                    {extractAllCharNames(project).map(n => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                ) : (
+                  <select value="" onChange={e => setBatchOldName(e.target.value)} style={{ ...inputSm, minWidth: 100 }}>
+                    <option value="">选择角色…</option>
+                    {extractAllCharNames(project).map(n => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                )}
+                <span style={{ fontSize: 12, color: "#94a3b8" }}>替换为</span>
+                <input
+                  value={batchNewName}
+                  onChange={e => setBatchNewName(e.target.value)}
+                  placeholder="新角色名（如：小明青年）"
+                  style={{ ...inputSm, minWidth: 140 }}
+                />
+                <span style={{ fontSize: 12, color: "#94a3b8" }}>·</span>
+                <button
+                  onClick={() => {
+                    if (!batchOldName.trim()) { onError("请先选择要替换的角色"); return; }
+                    if (!batchNewName.trim()) { onError("请输入新角色名"); return; }
+                    const epIds = batchEpIds.size > 0 ? Array.from(batchEpIds) : [];
+                    const scope = epIds.length > 0 ? `选中 ${epIds.length} 个章节` : "所有章节";
+                    if (!confirm(`确定将「${batchOldName}」替换为「${batchNewName}」？\n作用范围：${scope}\n\n此操作不可撤销。`)) return;
+                    setLoading(true);
+                    (async () => {
+                      try {
+                        const r = await api.batchReplaceCharacter(project.id, batchOldName.trim(), batchNewName.trim(), epIds);
+                        onChange();
+                        onError(`✅ 已替换 ${r.replaced} 条对白（涉及 ${r.affected_episodes} 个章节）`);
+                        setBatchOldName("");
+                        setBatchNewName("");
+                        setBatchEpIds(new Set());
+                        setShowBatchReplace(false);
+                      } catch (e: any) { onError(e.message); }
+                      finally { setLoading(false); }
+                    })();
+                  }}
+                  disabled={loading}
+                  style={{
+                    padding: "5px 14px", background: loading ? "#78350f" : "#f59e0b",
+                    color: loading ? "#a8a29e" : "#1c1917", border: "none", borderRadius: 4,
+                    cursor: loading ? "wait" : "pointer", fontWeight: 700, fontSize: 12,
+                  }}
+                >
+                  {loading ? "执行中…" : "⚠️ 确认替换"}
+                </button>
+              </div>
+              {/* 章节范围选择 */}
+              <div>
+                <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 4 }}>
+                  作用章节范围（不选 = 所有章节）：
+                </div>
+                <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                  {project.episodes.map((ep, i) => {
+                    const selected = batchEpIds.has(ep.id);
+                    return (
+                      <button
+                        key={ep.id}
+                        onClick={() => {
+                          setBatchEpIds(prev => {
+                            const next = new Set(prev);
+                            selected ? next.delete(ep.id) : next.add(ep.id);
+                            return next;
+                          });
+                        }}
+                        style={{
+                          padding: "2px 8px", borderRadius: 4, fontSize: 11,
+                          border: `1px solid ${selected ? "#f59e0b" : "#334155"}`,
+                          background: selected ? "#f59e0b22" : "transparent",
+                          color: selected ? "#f59e0b" : "#64748b",
+                          cursor: "pointer",
+                        }}
+                      >
+                        {i + 1}. {ep.title.length > 8 ? ep.title.slice(0, 8) + "…" : ep.title}
+                      </button>
+                    );
+                  })}
+                  {batchEpIds.size > 0 && (
+                    <button
+                      onClick={() => setBatchEpIds(new Set())}
+                      style={{ padding: "2px 8px", borderRadius: 4, fontSize: 11, background: "transparent", border: "1px solid #334155", color: "#64748b", cursor: "pointer" }}
+                    >清除选择</button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 剧集列表 */}
+      {project.episodes.length === 0 ? (
+        <p style={{ color: "#64748b", textAlign: "center", padding: 40 }}>暂无剧集</p>
+      ) : (
+        <div style={{ display: "grid", gap: 10 }}>
+          {project.episodes.map((ep) => (
+            <div key={ep.id} style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 10, overflow: "hidden" }}>
+              {/* 剧集头部 */}
+              <div
+                onClick={() => setExpanded(expanded === ep.id ? null : ep.id)}
+                style={{ padding: "14px 18px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}
+              >
+                <div>
+                  <span style={{ fontWeight: 600 }}>📺 {ep.title}</span>
+                  <span style={{ color: "#64748b", marginLeft: 10, fontSize: 13 }}>
+                    {ep.dialogues.length} 条对白
+                  </span>
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <span style={{ color: "#64748b", fontSize: 18 }}>{expanded === ep.id ? "▾" : "▸"}</span>
+                </div>
+              </div>
+
+              {/* 展开内容 */}
+              {expanded === ep.id && (
+                <div style={{ borderTop: "1px solid #334155", padding: 16 }}>
+                  {/* 摘要区 */}
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                      <label style={{ fontSize: 12, color: "#94a3b8" }}>📋 剧集摘要</label>
+                      <button onClick={async () => {
+                        try {
+                          await api.updateEpisode(project.id, ep.id, { summary: ep.summary });
+                          onError("✅ 摘要已保存");
+                        } catch (e: any) { onError(e.message); }
+                      }} style={{ ...smallBtn, fontSize: 11, padding: "1px 8px" }}>保存</button>
+                    </div>
+                    <textarea
+                      value={ep.summary || ""}
+                      onChange={(e) => {
+                        ep.summary = e.target.value;
+                      }}
+                      placeholder="输入剧集摘要，AI 生成对白的上下文..."
+                      rows={2}
+                      style={{ ...inputSm, width: "100%", resize: "vertical", minHeight: 40 }}
+                    />
+                  </div>
+
+                  <div style={{ display: "flex", gap: 6, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
+                    {/* 自动对白 */}
+                    <button onClick={async () => {
+                      if (!ep.summary) { onError("请先填写剧集摘要"); return; }
+                      if (!confirm("根据摘要自动生成对白？已有对白不会被删除。")) return;
+                      try {
+                        const r = await api.generateDialogues(project.id, ep.id);
+                        onChange();
+                        const nc = r.new_characters.length > 0 ? `，新增角色: ${r.new_characters.join(", ")}` : "";
+                        onError(`✅ 已生成 ${r.created} 条对白${nc}`);
+                      } catch (e: any) { onError(e.message); }
+                    }} style={{ ...smallBtn, color: "#a855f7", borderColor: "#a855f7" }}>✨ 自动对白</button>
+
+                    {/* 生成全部 + 模式选择 */}
+                    <div style={{ display: "flex", gap: 0, alignItems: "center" }}>
+                      <button onClick={() => batchGenerate(ep)} style={{ ...smallBtn, color: "#22c55e", borderColor: "#22c55e", borderRadius: "4px 0 0 4px" }}>
+                        🔊 生成全部音频
+                      </button>
+                      <select
+                        value={batchMode}
+                        onChange={(e) => setBatchMode(e.target.value as "pending" | "all")}
+                        style={{ ...smallBtn, borderRadius: "0 4px 4px 0", borderLeft: "none", color: "#94a3b8", padding: "3px 4px" }}
+                      >
+                        <option value="pending">仅未生成</option>
+                        <option value="all">全部重新生成</option>
+                      </select>
+                    </div>
+
+                    <button onClick={() => dlAll(ep.id)} style={smallBtn}>⬇ 下载全部音频</button>
+                    <button onClick={async () => {
+                      if (expanded) {
+                        const ep = project.episodes.find((e: any) => e.id === expanded);
+                        if (ep) {
+                          for (const d of ep.dialogues) {
+                            try { await api.refreshDialogue(project.id, ep.id, d.id); } catch {}
+                          }
+                        }
+                      }
+                      onChange();
+                    }} style={{ ...smallBtn, color: "#3b82f6", borderColor: "#3b82f6" }}>🔄 刷新状态</button>
+
+                    {/* 导入导出 */}
+                    <button onClick={() => exportEpisode(ep)} style={{ ...smallBtn, color: "#f59e0b", borderColor: "#f59e0b" }}>📤 导出</button>
+                    <button onClick={() => importDialogues(ep.id)} style={{ ...smallBtn, color: "#f59e0b", borderColor: "#f59e0b" }}>📥 导入</button>
+
+                    <div style={{ flex: 1 }} />
+
+                    {(ep.dialogues?.length ?? 0) > 0 && (
+                      <button onClick={async () => {
+                        const count = ep.dialogues.length;
+                        if (!confirm(`⚠️ 不可逆操作！\n\n将删除该剧集全部 ${count} 条对白及其所有音频文件（磁盘文件一并删除）。\n\n确定要继续吗？`)) return;
+                        try {
+                          const r = await api.purgeEpisodeDialogues(project.id, ep.id);
+                          onChange();
+                          onError(`✅ 已清空 ${r.deleted_dialogues} 条对白，删除 ${r.deleted_files} 个音频文件`);
+                        } catch (e: any) { onError(e.message); }
+                      }} style={{ ...smallBtn, color: "#f59e0b", borderColor: "#f59e0b" }}>🗑 清空对白</button>
+                    )}
+                    <button onClick={() => remove(ep.id)} style={{ ...smallBtn, color: "#ef4444", borderColor: "#ef4444" }}>🗑 删除</button>
+                  </div>
+                  {/* Timeline editor */}
+                  <Timeline
+                    project={project}
+                    episode={ep}
+                    onChange={onChange}
+                    onError={onError}
+                  />
+
+                  <DialogueList
+                    project={project}
+                    episode={ep}
+                    onChange={onChange}
+                    onError={onError}
+                  />
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const smallBtn: React.CSSProperties = {
+  background: "transparent", color: "#94a3b8",
+  border: "1px solid #334155", borderRadius: 4,
+  padding: "3px 10px", cursor: "pointer", fontSize: 12,
+};
+const inputSm: React.CSSProperties = {
+  padding: "5px 8px", background: "#1e293b", border: "1px solid #334155",
+  borderRadius: 4, color: "#e2e8f0", fontSize: 13, outline: "none",
+};

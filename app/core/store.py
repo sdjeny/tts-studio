@@ -439,3 +439,128 @@ def clear_audio_history(project_id: str, episode_id: str, dialogue_id: str) -> d
 def update_dialogue_status(project_id: str, episode_id: str, dialogue_id: str,
                            status: str) -> dict | None:
     return update_dialogue(project_id, episode_id, dialogue_id, status=status)
+
+
+# ─── Timeline ───────────────────────────────────────────────
+
+def get_timeline(project_id: str, episode_id: str) -> dict | None:
+    """Get timeline dict from episode, or None if not yet created."""
+    ep = get_episode(project_id, episode_id)
+    if not ep:
+        return None
+    return ep.get("timeline")
+
+
+def save_timeline(project_id: str, episode_id: str, timeline: dict) -> bool:
+    """Write timeline dict into episode. Returns True on success."""
+    data = _read()
+    for p in data["projects"]:
+        if p["id"] == project_id:
+            for ep in p["episodes"]:
+                if ep["id"] == episode_id:
+                    ep["timeline"] = timeline
+                    _write(data)
+                    return True
+    return False
+
+
+def _update_timeline_field(project_id: str, episode_id: str, updater) -> bool:
+    """Generic helper: read timeline, apply updater(timeline), write back."""
+    data = _read()
+    for p in data["projects"]:
+        if p["id"] == project_id:
+            for ep in p["episodes"]:
+                if ep["id"] == episode_id:
+                    timeline = ep.get("timeline")
+                    if timeline is None:
+                        return False
+                    updater(timeline)
+                    _write(data)
+                    return True
+    return False
+
+
+def add_track_to_timeline(project_id: str, episode_id: str, track: dict) -> bool:
+    return _update_timeline_field(project_id, episode_id, lambda t: t["tracks"].append(track))
+
+
+def update_track_in_timeline(project_id: str, episode_id: str, track_id: str, **fields) -> dict | None:
+    result = [None]
+    def updater(t):
+        for tr in t["tracks"]:
+            if tr["id"] == track_id:
+                tr.update(fields)
+                result[0] = tr
+                break
+    if _update_timeline_field(project_id, episode_id, updater):
+        return result[0]
+    return None
+
+
+def delete_track_from_timeline(project_id: str, episode_id: str, track_id: str) -> bool:
+    def updater(t):
+        if len(t["tracks"]) <= 1:
+            raise ValueError("Cannot delete the last track")
+        t["tracks"] = [tr for tr in t["tracks"] if tr["id"] != track_id]
+        t["clips"] = [c for c in t["clips"] if c["track_id"] != track_id]
+    try:
+        return _update_timeline_field(project_id, episode_id, updater)
+    except ValueError:
+        return False
+
+
+def add_clip_to_timeline(project_id: str, episode_id: str, clip: dict) -> bool:
+    return _update_timeline_field(project_id, episode_id, lambda t: t["clips"].append(clip))
+
+
+def update_clip_in_timeline(project_id: str, episode_id: str, clip_id: str, **fields) -> dict | None:
+    result = [None]
+    def updater(t):
+        for c in t["clips"]:
+            if c["id"] == clip_id:
+                c.update(fields)
+                result[0] = c
+                break
+    if _update_timeline_field(project_id, episode_id, updater):
+        return result[0]
+    return None
+
+
+def delete_clip_from_timeline(project_id: str, episode_id: str, clip_id: str) -> bool:
+    def updater(t):
+        before = len(t["clips"])
+        t["clips"] = [c for c in t["clips"] if c["id"] != clip_id]
+        return len(t["clips"]) < before
+    return _update_timeline_field(project_id, episode_id, updater)
+
+
+def add_imported_audio(project_id: str, episode_id: str, audio: dict) -> bool:
+    def updater(t):
+        if "imported_audio" not in t:
+            t["imported_audio"] = []
+        t["imported_audio"].append(audio)
+    return _update_timeline_field(project_id, episode_id, updater)
+
+
+def add_snapshot(project_id: str, episode_id: str, snapshot: dict) -> bool:
+    def updater(t):
+        if "snapshots" not in t:
+            t["snapshots"] = []
+        t["snapshots"].append(snapshot)
+        if len(t["snapshots"]) > 10:
+            t["snapshots"] = t["snapshots"][-10:]
+    return _update_timeline_field(project_id, episode_id, updater)
+
+
+def restore_snapshot(project_id: str, episode_id: str, version: int) -> dict | None:
+    result = [None]
+    def updater(t):
+        for s in t.get("snapshots", []):
+            if s["version"] == version:
+                t["tracks"] = copy.deepcopy(s["tracks"])
+                t["clips"] = copy.deepcopy(s["clips"])
+                result[0] = t
+                break
+    if _update_timeline_field(project_id, episode_id, updater):
+        return result[0]
+    return None

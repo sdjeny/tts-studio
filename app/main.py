@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse
 
 import uuid as _uuid
-from app.api import projects, episodes
+from app.api import projects, episodes, timeline
 import app.core.store as _store
 from app.core.store import get_project
 from app.core.audio_effects import apply_effects_to_file
@@ -98,6 +98,7 @@ app.mount("/static/audio", StaticFiles(directory=str(AUDIO_DIR)), name="audio")
 # API routes
 app.include_router(projects.router, prefix="/api")
 app.include_router(episodes.router, prefix="/api")
+app.include_router(timeline.router, prefix="/api")
 
 
 @app.get("/api/health")

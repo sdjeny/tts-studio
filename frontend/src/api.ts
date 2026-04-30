@@ -278,6 +278,88 @@ export const api = {
       if (!r.ok) throw new Error(`${r.status}: ${r.text()}`);
       return r.blob();
     }),
+
+  // ── Timeline ───────────────────────────────────────────
+  assembleTimeline: (pid: string, eid: string, gap: number = 0.5) =>
+    request<{ timeline: any; added: number }>(
+      `/projects/${pid}/episodes/${eid}/timeline/assemble`,
+      { method: "POST", body: JSON.stringify({ gap }) },
+    ),
+
+  getTimeline: (pid: string, eid: string) =>
+    request<{ timeline: any | null }>(`/projects/${pid}/episodes/${eid}/timeline`),
+
+  addTimelineClip: (pid: string, eid: string, data: Record<string, any>) =>
+    request<{ clip: any }>(`/projects/${pid}/episodes/${eid}/timeline/clips`, {
+      method: "POST", body: JSON.stringify(data),
+    }),
+
+  updateTimelineClip: (pid: string, eid: string, clipId: string, data: Record<string, any>) =>
+    request<{ clip: any }>(`/projects/${pid}/episodes/${eid}/timeline/clips/${clipId}`, {
+      method: "PUT", body: JSON.stringify(data),
+    }),
+
+  deleteTimelineClip: (pid: string, eid: string, clipId: string) =>
+    request<void>(`/projects/${pid}/episodes/${eid}/timeline/clips/${clipId}`, { method: "DELETE" }),
+
+  duplicateTimelineClip: (pid: string, eid: string, clipId: string) =>
+    request<{ clip: any }>(
+      `/projects/${pid}/episodes/${eid}/timeline/clips/${clipId}/duplicate`,
+      { method: "POST" },
+    ),
+
+  splitTimelineClip: (pid: string, eid: string, clipId: string, splitTime: number) =>
+    request<{ first_clip: any; second_clip: any }>(
+      `/projects/${pid}/episodes/${eid}/timeline/clips/${clipId}/split`,
+      { method: "POST", body: JSON.stringify({ split_time: splitTime }) },
+    ),
+
+  addTimelineTrack: (pid: string, eid: string, name: string, type: string = "dialogue") =>
+    request<{ track: any }>(`/projects/${pid}/episodes/${eid}/timeline/tracks`, {
+      method: "POST", body: JSON.stringify({ name, type }) },
+    }),
+
+  updateTimelineTrack: (pid: string, eid: string, trackId: string, data: Record<string, any>) =>
+    request<{ track: any }>(`/projects/${pid}/episodes/${eid}/timeline/tracks/${trackId}`, {
+      method: "PUT", body: JSON.stringify(data),
+    }),
+
+  deleteTimelineTrack: (pid: string, eid: string, trackId: string) =>
+    request<void>(`/projects/${pid}/episodes/${eid}/timeline/tracks/${trackId}`, { method: "DELETE" }),
+
+  importTimelineAudio: (pid: string, eid: string, file: File) =>
+    fetch(`${BASE}/projects/${pid}/episodes/${eid}/timeline/import-audio`, {
+      method: "POST",
+      body: (() => { const fd = new FormData(); fd.append("file", file); return fd; })(),
+    }).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); }),
+
+  normalizeTimeline: (pid: string, eid: string, targetDb: number = -20) =>
+    request<{ clips_normalized: number; clips_skipped: number }>(
+      `/projects/${pid}/episodes/${eid}/timeline/normalize`,
+      { method: "POST", body: JSON.stringify({ target_db: targetDb }) },
+    ),
+
+  exportTimeline: (pid: string, eid: string, data: { format?: string; sample_rate?: number; normalization_db?: number } = {}) =>
+    fetch(`${BASE}/projects/${pid}/episodes/${eid}/timeline/export`, {
+      method: "POST", body: JSON.stringify({ format: "wav", sample_rate: 24000, normalization_db: -20, ...data }),
+    }).then(r => { if (!r.ok) throw new Error(r.statusText); return r.blob(); }),
+
+  previewTimelineUrl: (pid: string, eid: string) =>
+    `${BASE}/projects/${pid}/episodes/${eid}/timeline/preview`,
+
+  saveTimelineSnapshot: (pid: string, eid: string) =>
+    request<{ version: number; created_at: string }>(
+      `/projects/${pid}/episodes/${eid}/timeline/snapshot`, { method: "POST" },
+    ),
+
+  getTimelineSnapshots: (pid: string, eid: string) =>
+    request<{ snapshots: any[] }>(`/projects/${pid}/episodes/${eid}/timeline/snapshots`),
+
+  restoreTimelineSnapshot: (pid: string, eid: string, version: number) =>
+    request<{ timeline: any }>(
+      `/projects/${pid}/episodes/${eid}/timeline/snapshots/${version}/restore`,
+      { method: "POST" },
+    ),
 };
 
 export type { Project as ProjectType };
