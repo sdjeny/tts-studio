@@ -43,7 +43,7 @@ function TimelineRuler({ duration, zoom, scrollX, currentTime, onSeek }: {
   );
 }
 
-function ClipWidget({ clip, zoom, trackHeight, isSelected, onSelect, onMove, onTrimLeft, onTrimRight, onDelete, onDuplicate, onVolumeChange }: {
+function ClipWidget({ clip, zoom, trackHeight, isSelected, onSelect, onMove, onTrimLeft, onTrimRight, onDelete, onDuplicate, onVolumeChange: _onVolumeChange }: {
   clip: any; zoom: number; trackHeight: number; isSelected: boolean;
   onSelect: () => void;
   onMove: (newStart: number) => void;
@@ -198,7 +198,7 @@ function TrackHeader({ track, onUpdate, onDelete }: {
 
 /* ─── Main Timeline Component ─── */
 
-export default function Timeline({ project, episode, onChange, onError }: {
+export default function Timeline({ project, episode, onError }: {
   project: Project; episode: any; onChange: () => void; onError: (m: string) => void;
 }) {
   const [timeline, setTimeline] = useState<any>(null);
@@ -208,7 +208,7 @@ export default function Timeline({ project, episode, onChange, onError }: {
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [showExport, setShowExport] = useState(false);
-  const [showImport, setShowImport] = useState(false);
+
   const audioCtxRef = useRef<AudioContext | null>(null);
   const sourcesRef = useRef<AudioBufferSourceNode[]>([]);
   const animRef = useRef(0);
@@ -259,7 +259,7 @@ export default function Timeline({ project, episode, onChange, onError }: {
         const resp = await fetch(`/static/audio/${fn}`);
         const data = await resp.arrayBuffer();
         const buf = await ctx.decodeAudioData(data);
-        buffers.set(fn, buf);
+        buffers.set(fn as string, buf as AudioBuffer);
       } catch {}
     }
 
@@ -412,7 +412,6 @@ export default function Timeline({ project, episode, onChange, onError }: {
           sfxTrack = tr.track;
           setTimeline((prev: any) => prev ? { ...prev, tracks: [...prev.tracks, sfxTrack] } : prev);
         }
-        const maxEnd = Math.max(...timeline.clips.map((c: any) => c.start_time + c.duration), 0);
         await api.addTimelineClip(project.id, episode.id, {
           track_id: sfxTrack.id,
           source_type: "imported",

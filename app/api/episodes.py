@@ -26,6 +26,72 @@ AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 # TTS 服务支持的音色列表
 _VALID_VOICES = {"aiden", "dylan", "eric", "ono_anna", "ryan", "serena", "sohee", "uncle_fu", "vivian"}
 
+# 虚拟内置角色（不在 proj["characters"] 中，但 LLM 需要感知）
+_VIRTUAL_CHARS = [
+    {"id": "__旁白__", "name": "旁白", "voice_id": "aiden", "base_instruct": "", "description": "旁白叙述者"},
+    {"id": "__场景__", "name": "场景", "voice_id": "aiden", "base_instruct": "", "description": "场景描写"},
+]
+
+
+def _build_chars_info(proj: dict, detailed: bool = False) -> list[str]:
+    """构建角色信息列表，包含真实角色 + 虚拟角色（旁白、场景）。
+    detailed=True 时包含 base_instruct（用于对白/大纲生成），False 时只有基础信息。
+    """
+    chars = list(proj.get("characters", [])) + _VIRTUAL_CHARS
+    result = []
+    for c in chars:
+        if detailed:
+            base_instruct = c.get("base_instruct", "")
+            desc = c.get("description", "无")
+            result.append(
+                f"- {c['name']} (voice: {c.get('voice_id', '默认')}, "
+                f"基础风格: {base_instruct or '无'}, "
+                f"性格/描述: {desc})"
+            )
+        else:
+            result.append(f"- {c['name']} (voice: {c.get('voice_id', '默认')}, 描述: {c.get('description', '无')})")
+    return result
+
+
+def _ensure_virtual_chars_in_project(project_id: str, proj: dict) -> None:
+    """确保虚拟角色（旁白、场景）在项目的 characters 列表中。
+    如果不存在则自动创建，赋予默认风格和音色。
+    """
+    from app.core.store import add_character
+
+    existing_names = {c["name"] for c in proj.get("characters", [])}
+    # 默认风格映射
+    default_styles = {
+        "旁白": "沉稳叙述、略带磁性",
+        "场景": "平静舒缓、描述性",
+    }
+    default_voices = {
+        "旁白": "dylan",
+        "场景": "sohee",
+    }
+    for vc in _VIRTUAL_CHARS:
+        char_name = vc["name"]
+        if char_name not in existing_names:
+            add_character(
+                project_id,
+                char_name,
+                voice_id=default_voices.get(char_name, "aiden"),
+                description=vc.get("description", ""),
+                base_instruct=default_styles.get(char_name, ""),
+            )
+            # 同步更新内存中的 proj，避免同一请求内重复添加
+            proj["characters"].append({
+                "id": vc["id"],
+                "name": char_name,
+                "voice_id": default_voices.get(char_name, "aiden"),
+                "speed": 1.0,
+                "pitch": 1.0,
+                "description": vc.get("description", ""),
+                "base_instruct": default_styles.get(char_name, ""),
+                "audio_effects": [],
+                "created_at": store._now(),
+            })
+
 
 def _audio_duration(filepath: str) -> float:
     """读取音频文件时长（秒），失败返回 0。"""
@@ -50,6 +116,7 @@ class EpisodeCreate(BaseModel):
 class EpisodeUpdate(BaseModel):
     title: str = ""
     summary: str = ""
+    style_enabled: bool | None = None
 
 
 class DialogueCreate(BaseModel):
@@ -63,6 +130,7 @@ class DialogueUpdate(BaseModel):
     character_id: str | None = None
     text: str | None = None
     instruct: str | None = None
+    style_enabled: bool | None = None
     order: int | None = None
 
 
@@ -94,11 +162,25 @@ async def api_update_episode(project_id: str, episode_id: str, body: EpisodeUpda
         fields["title"] = body.title
     if body.summary:
         fields["summary"] = body.summary
+    if body.style_enabled is not None:
+        fields["style_enabled"] = body.style_enabled
     if not fields:
         raise HTTPException(400, "没有要更新的字段")
     ep = update_episode(project_id, episode_id, **fields)
     if not ep:
         raise HTTPException(404, "Episode not found")
+    # 同步更新所有对白的 style_enabled
+    if body.style_enabled is not None:
+        data = store._read()
+        for p in data["projects"]:
+            if p["id"] == project_id:
+                for ep_in in p["episodes"]:
+                    if ep_in["id"] == episode_id:
+                        for d in ep_in["dialogues"]:
+                            d["style_enabled"] = body.style_enabled
+                        store._write(data)
+                        break
+                break
     return ep
 
 
@@ -154,6 +236,27 @@ async def api_update_dialogue(project_id: str, episode_id: str, dialogue_id: str
     if not dlg:
         raise HTTPException(404, "Dialogue not found")
     return dlg
+
+
+@router.patch("/projects/{project_id}/episodes/{episode_id}/dialogues/batch-style")
+async def api_batch_update_dialogue_style(project_id: str, episode_id: str, body: EpisodeUpdate):
+    """批量更新剧集所有对白的 style_enabled。"""
+    if body.style_enabled is None:
+        raise HTTPException(400, "style_enabled 不能为空")
+    ep = get_episode(project_id, episode_id)
+    if not ep:
+        raise HTTPException(404, "Episode not found")
+    data = store._read()
+    for p in data["projects"]:
+        if p["id"] == project_id:
+            for ep_in in p["episodes"]:
+                if ep_in["id"] == episode_id:
+                    for d in ep_in["dialogues"]:
+                        d["style_enabled"] = body.style_enabled
+                    store._write(data)
+                    return {"ok": True, "updated": len(ep_in["dialogues"])}
+            break
+    raise HTTPException(404, "Episode not found")
 
 
 @router.delete("/projects/{project_id}/episodes/{episode_id}/dialogues/{dialogue_id}")
@@ -323,12 +426,21 @@ async def api_generate_audio(project_id: str, episode_id: str, dialogue_id: str)
 
     voice_id = _safe_voice_id(char.get("voice_id", "aiden"))
 
+    # 组合 instruct：根据 style_enabled 决定是否叠加场景情绪
+    base_instruct = char.get("base_instruct", "")
+    scene_instruct = dlg.get("instruct", "")
+    style_enabled = dlg.get("style_enabled", False)  # 默认关闭
+    if style_enabled:
+        full_instruct = f"{base_instruct}，{scene_instruct}" if base_instruct and scene_instruct else (base_instruct or scene_instruct)
+    else:
+        full_instruct = base_instruct  # 仅角色基础风格
+
     # Submit TTS, get task_id immediately
     try:
         task_id = await submit_tts(
             text=dlg["text"],
             speaker=voice_id,
-            instruct=dlg.get("instruct", ""),
+            instruct=full_instruct,
             speed=char.get("speed", 1.0),
             pitch=char.get("pitch", 1.0),
         )
@@ -394,6 +506,327 @@ async def api_generate_audio(project_id: str, episode_id: str, dialogue_id: str)
         if dlg_item["id"] == dialogue_id:
             return dlg_item
     raise HTTPException(404, "Dialogue not found")
+
+
+class BatchAudioRequest(BaseModel):
+    dialogue_ids: list[str]
+
+
+class BatchRefreshRequest(BaseModel):
+    dialogue_ids: list[str]
+
+
+@router.post("/projects/{project_id}/episodes/{episode_id}/refresh-batch")
+async def api_batch_refresh_dialogues(project_id: str, episode_id: str, body: BatchRefreshRequest):
+    """批量刷新对白状态，SSE 流式返回每条进度。"""
+    from fastapi.responses import StreamingResponse
+    import json as _json
+
+    ep = get_episode(project_id, episode_id)
+    if not ep:
+        raise HTTPException(404, "Episode not found")
+
+    total = len(body.dialogue_ids)
+
+    async def _stream():
+        ok = 0
+        fail = 0
+        for i, dlg_id in enumerate(body.dialogue_ids):
+            try:
+                # 调用单条 refresh 逻辑（直接内联，避免重复 HTTP 调用）
+                _dlg = None
+                for d in ep["dialogues"]:
+                    if d["id"] == dlg_id:
+                        _dlg = d
+                        break
+                if not _dlg:
+                    fail += 1
+                    yield f"data: {_json.dumps({'index': i, 'total': total, 'status': 'error', 'error': '对白不存在'}, ensure_ascii=False)}\n\n"
+                    continue
+
+                # 复用 api_refresh_dialogue 的核心逻辑
+                await _refresh_single_dialogue(project_id, episode_id, _dlg)
+                ok += 1
+                yield f"data: {_json.dumps({'index': i, 'total': total, 'status': 'ok'}, ensure_ascii=False)}\n\n"
+            except Exception as e:
+                fail += 1
+                yield f"data: {_json.dumps({'index': i, 'total': total, 'status': 'error', 'error': str(e)}, ensure_ascii=False)}\n\n"
+
+        yield f"data: {_json.dumps({'status': 'done', 'total': total, 'ok': ok, 'failed_count': fail}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+async def _refresh_single_dialogue(project_id: str, episode_id: str, dlg: dict):
+    """刷新单条对白状态的核心逻辑（从 api_refresh_dialogue 提取）。"""
+    def _replace_placeholder(placeholder, real_record):
+        data = store._read()
+        for p in data["projects"]:
+            if p["id"] == project_id:
+                for ep_in in p["episodes"]:
+                    if ep_in["id"] == episode_id:
+                        for d in ep_in["dialogues"]:
+                            if d["id"] == dlg["id"]:
+                                d["audio_history"] = [
+                                    a for a in d["audio_history"]
+                                    if a.get("id") != placeholder["id"]
+                                ]
+                                d["audio_history"].append(real_record)
+                                d["current_audio_id"] = real_record["id"]
+                                d["status"] = "completed"
+                                store._write(data)
+                                return
+                        break
+                break
+
+    async def _try_download_audio(task_id, placeholder):
+        try:
+            result = await check_tts_status(task_id)
+            if result["status"] in ("pending", "processing"):
+                return False
+            if result["status"] == "failed":
+                data = store._read()
+                for p in data["projects"]:
+                    if p["id"] == project_id:
+                        for ep_in in p["episodes"]:
+                            if ep_in["id"] == episode_id:
+                                for d in ep_in["dialogues"]:
+                                    if d["id"] == dlg["id"]:
+                                        d["audio_history"] = [
+                                            a for a in d["audio_history"]
+                                            if a.get("id") != placeholder["id"]
+                                        ]
+                                        d["audio_history"].append({
+                                            "id": f"failed_{uuid.uuid4().hex[:8]}",
+                                            "url": "",
+                                            "filename": "",
+                                            "created_at": _now(),
+                                            "status": "failed",
+                                            "error": result["error"] or "TTS 任务失败",
+                                        })
+                                        d["status"] = "failed"
+                                        store._write(data)
+                                        return True
+                                break
+                        break
+                return True
+            client = get_client()
+            loop = asyncio.get_event_loop()
+            dl_result = await loop.run_in_executor(None, lambda: client.download(task_id))
+            if not dl_result.ok:
+                return False
+            filename = f"{task_id}.wav"
+            filepath = AUDIO_DIR / filename
+            with open(filepath, "wb") as f:
+                f.write(dl_result.data)
+            real_id = f"audio_{uuid.uuid4().hex[:8]}"
+            _replace_placeholder(placeholder, {
+                "id": real_id,
+                "url": f"/static/audio/{filename}",
+                "filename": filename,
+                "created_at": _now(),
+                "raw": True,
+                "duration": _audio_duration(str(filepath)),
+            })
+            return True
+        except Exception:
+            return False
+
+    # 1. 处理 generating 状态的占位记录
+    for ah in dlg.get("audio_history", []):
+        if ah.get("status") != "generating" or ah.get("url"):
+            continue
+        task_id = ah.get("task_id", "")
+        if task_id:
+            done = await _try_download_audio(task_id, ah)
+            if done:
+                return
+        else:
+            try:
+                _char = None
+                _data = store._read()
+                for _p in _data["projects"]:
+                    if _p["id"] == project_id:
+                        for _c in _p.get("characters", []):
+                            if _c["id"] == dlg.get("character_id"):
+                                _char = _c
+                                break
+                        break
+                if not _char:
+                    continue
+                voice_id = _safe_voice_id(_char.get("voice_id", "aiden"))
+                base_instruct = _char.get("base_instruct", "")
+                scene_instruct = dlg.get("instruct", "")
+                style_enabled = dlg.get("style_enabled", False)
+                if style_enabled:
+                    full_instruct = f"{base_instruct}，{scene_instruct}" if base_instruct and scene_instruct else (base_instruct or scene_instruct)
+                else:
+                    full_instruct = base_instruct
+                new_task_id = await submit_tts(
+                    text=dlg["text"],
+                    speaker=voice_id,
+                    instruct=full_instruct,
+                    speed=_char.get("speed", 1.0),
+                    pitch=_char.get("pitch", 1.0),
+                )
+                data = store._read()
+                for p in data["projects"]:
+                    if p["id"] == project_id:
+                        for ep_in in p["episodes"]:
+                            if ep_in["id"] == episode_id:
+                                for d in ep_in["dialogues"]:
+                                    if d["id"] == dlg["id"]:
+                                        for a in d["audio_history"]:
+                                            if a.get("id") == ah["id"]:
+                                                a["task_id"] = new_task_id
+                                                a["interrupted"] = False
+                                                a["error"] = ""
+                                                break
+                                        store._write(data)
+                                        break
+                                break
+                        break
+            except Exception:
+                pass
+
+    # 2. 修复磁盘上已丢失的文件记录
+    for ah in dlg.get("audio_history", []):
+        fn = ah.get("filename", "")
+        if not fn:
+            continue
+        fp = AUDIO_DIR / fn
+        url = ah.get("url", "")
+        if not fp.exists() and not url and ah.get("status") != "failed":
+            ah["interrupted"] = True
+            ah["error"] = "文件丢失，等待重试"
+
+    data = store._read()
+    for p in data["projects"]:
+        if p["id"] == project_id:
+            for ep_in in p["episodes"]:
+                if ep_in["id"] == episode_id:
+                    for d in ep_in["dialogues"]:
+                        if d["id"] == dlg["id"]:
+                            store._write(data)
+                            return
+                    break
+            break
+
+
+@router.post("/projects/{project_id}/episodes/{episode_id}/generate-batch")
+async def api_generate_batch_audio(project_id: str, episode_id: str, body: BatchAudioRequest):
+    """批量提交所有对白的 TTS 任务，SSE 流式返回每条进度，不等下载完成。"""
+    from fastapi.responses import StreamingResponse
+    import json as _json
+
+    ep = get_episode(project_id, episode_id)
+    if not ep:
+        raise HTTPException(404, "Episode not found")
+
+    proj = get_project(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+
+    # 构建角色查找表（真实角色 + 虚拟角色）
+    char_map = {c["id"]: c for c in proj.get("characters", [])}
+    for vc in _VIRTUAL_CHARS:
+        char_map[vc["id"]] = vc
+
+    total = len(body.dialogue_ids)
+
+    async def _stream():
+        submitted = 0
+        failed_list = []
+
+        for i, dlg_id in enumerate(body.dialogue_ids):
+            # 查找对白
+            dlg = None
+            for d in ep["dialogues"]:
+                if d["id"] == dlg_id:
+                    dlg = d
+                    break
+
+            if not dlg:
+                msg = _json.dumps({"index": i, "total": total, "dialogue_id": dlg_id, "status": "error", "error": "对白不存在"}, ensure_ascii=False)
+                yield f"data: {msg}\n\n"
+                failed_list.append(dlg_id)
+                continue
+
+            char = char_map.get(dlg["character_id"])
+            if not char:
+                msg = _json.dumps({"index": i, "total": total, "dialogue_id": dlg_id, "status": "error", "error": "角色不存在"}, ensure_ascii=False)
+                yield f"data: {msg}\n\n"
+                failed_list.append(dlg_id)
+                continue
+
+            voice_id = _safe_voice_id(char.get("voice_id", "aiden"))
+            base_instruct = char.get("base_instruct", "")
+            scene_instruct = dlg.get("instruct", "")
+            style_enabled = dlg.get("style_enabled", False)
+            if style_enabled:
+                full_instruct = f"{base_instruct}，{scene_instruct}" if base_instruct and scene_instruct else (base_instruct or scene_instruct)
+            else:
+                full_instruct = base_instruct
+
+            try:
+                task_id = await submit_tts(
+                    text=dlg["text"],
+                    speaker=voice_id,
+                    instruct=full_instruct,
+                    speed=char.get("speed", 1.0),
+                    pitch=char.get("pitch", 1.0),
+                )
+                submitted += 1
+
+                # 写回 store：创建占位记录
+                placeholder_id = f"gen_{uuid.uuid4().hex[:8]}"
+                data = store._read()
+                for p in data["projects"]:
+                    if p["id"] == project_id:
+                        for ep_in in p["episodes"]:
+                            if ep_in["id"] == episode_id:
+                                for d in ep_in["dialogues"]:
+                                    if d["id"] == dlg_id:
+                                        d["audio_history"].append({
+                                            "id": placeholder_id,
+                                            "url": "",
+                                            "filename": "",
+                                            "created_at": _now(),
+                                            "status": "generating",
+                                            "task_id": task_id,
+                                        })
+                                        d["current_audio_id"] = placeholder_id
+                                        d["status"] = "generating"
+                                break
+                        break
+                store._write(data)
+
+                # 启动后台下载（不等完成）
+                asyncio.create_task(
+                    _download_and_save(project_id, episode_id, dlg_id, task_id, placeholder_id)
+                )
+
+                msg = _json.dumps({"index": i, "total": total, "dialogue_id": dlg_id, "status": "submitted", "task_id": task_id}, ensure_ascii=False)
+                yield f"data: {msg}\n\n"
+
+            except Exception as e:
+                msg = _json.dumps({"index": i, "total": total, "dialogue_id": dlg_id, "status": "error", "error": str(e)}, ensure_ascii=False)
+                yield f"data: {msg}\n\n"
+                failed_list.append(dlg_id)
+
+        # 发送汇总
+        summary = _json.dumps({"status": "done", "total": total, "submitted": submitted, "failed_count": len(failed_list)}, ensure_ascii=False)
+        yield f"data: {summary}\n\n"
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.delete("/projects/{project_id}/episodes/{episode_id}/dialogues/{dialogue_id}/history")
@@ -489,155 +922,7 @@ async def api_refresh_dialogue(project_id: str, episode_id: str, dialogue_id: st
     if not dlg:
         raise HTTPException(404, "Dialogue not found")
 
-    def _replace_placeholder(placeholder, real_record):
-        """Helper: 替换占位记录为真实记录"""
-        data = store._read()
-        for p in data["projects"]:
-            if p["id"] == project_id:
-                for ep_in in p["episodes"]:
-                    if ep_in["id"] == episode_id:
-                        for d in ep_in["dialogues"]:
-                            if d["id"] == dialogue_id:
-                                d["audio_history"] = [
-                                    a for a in d["audio_history"]
-                                    if a.get("id") != placeholder["id"]
-                                ]
-                                d["audio_history"].append(real_record)
-                                d["current_audio_id"] = real_record["id"]
-                                d["status"] = "completed"
-                                store._write(data)
-                                return
-                        break
-                break
-
-    async def _try_download_audio(task_id, placeholder):
-        """查 TTS 状态 → 下载 → 保存。
-        TTS 服务器返回 failed → 写 failed 状态（真正的失败）。
-        网络/系统异常 → 保持 generating，等下次刷新重试。
-        返回 True 表示已处理（成功或明确失败），False 表示未完成。
-        """
-        try:
-            result = await check_tts_status(task_id)
-            if result["status"] in ("pending", "processing"):
-                return False  # 还没完成，等下次刷新
-            if result["status"] == "failed":
-                # TTS 服务器明确返回失败 → 这才是真正的失败
-                data = store._read()
-                for p in data["projects"]:
-                    if p["id"] == project_id:
-                        for ep_in in p["episodes"]:
-                            if ep_in["id"] == episode_id:
-                                for d in ep_in["dialogues"]:
-                                    if d["id"] == dialogue_id:
-                                        d["audio_history"] = [
-                                            a for a in d["audio_history"]
-                                            if a.get("id") != placeholder["id"]
-                                        ]
-                                        d["audio_history"].append({
-                                            "id": f"failed_{uuid.uuid4().hex[:8]}",
-                                            "url": "",
-                                            "filename": "",
-                                            "created_at": _now(),
-                                            "status": "failed",
-                                            "error": result["error"] or "TTS 任务失败",
-                                        })
-                                        d["status"] = "failed"
-                                        store._write(data)
-                                        return True
-                                break
-                        break
-                return True
-            # success → 下载
-            client = get_client()
-            loop = asyncio.get_event_loop()
-            dl_result = await loop.run_in_executor(None, lambda: client.download(task_id))
-            if not dl_result.ok:
-                # 下载失败是系统异常，不写 failed，保持 generating 等重试
-                return False
-            filename = f"{task_id}.wav"
-            filepath = AUDIO_DIR / filename
-            with open(filepath, "wb") as f:
-                f.write(dl_result.data)
-            real_id = f"audio_{uuid.uuid4().hex[:8]}"
-            _replace_placeholder(placeholder, {
-                "id": real_id,
-                "url": f"/static/audio/{filename}",
-                "filename": filename,
-                "created_at": _now(),
-                "raw": True,
-                "duration": _audio_duration(str(filepath)),
-            })
-            return True
-        except Exception:
-            # 网络/系统异常 → 不写失败，保持 generating，等下次刷新重试
-            return False
-
-    # 1. 处理 generating 状态的占位记录（包括 interrupted 的）
-    for ah in dlg.get("audio_history", []):
-        if ah.get("status") != "generating" or ah.get("url"):
-            continue
-        task_id = ah.get("task_id", "")
-        if task_id:
-            # 有 task_id → 查 TTS 状态
-            done = await _try_download_audio(task_id, ah)
-            if done:
-                return get_episode(project_id, episode_id)
-        else:
-            # 没有 task_id（submit 阶段就中断了）→ 重新提交
-            try:
-                voice_id = _safe_voice_id(char.get("voice_id", "aiden"))
-                new_task_id = await submit_tts(
-                    text=dlg["text"],
-                    speaker=voice_id,
-                    instruct=dlg.get("instruct", ""),
-                    speed=char.get("speed", 1.0),
-                    pitch=char.get("pitch", 1.0),
-                )
-                data = store._read()
-                for p in data["projects"]:
-                    if p["id"] == project_id:
-                        for ep_in in p["episodes"]:
-                            if ep_in["id"] == episode_id:
-                                for d in ep_in["dialogues"]:
-                                    if d["id"] == dialogue_id:
-                                        for a in d["audio_history"]:
-                                            if a.get("id") == ah["id"]:
-                                                a["task_id"] = new_task_id
-                                                a["interrupted"] = False
-                                                a["error"] = ""
-                                                break
-                                        store._write(data)
-                                        break
-                                break
-                        break
-            except Exception:
-                pass  # 提交失败，保持 generating，等下次刷新
-
-    # 2. 修复磁盘上已丢失的文件记录（文件丢了但状态不是 failed 的 → 重新生成）
-    for ah in dlg.get("audio_history", []):
-        fn = ah.get("filename", "")
-        if not fn:
-            continue
-        fp = AUDIO_DIR / fn
-        url = ah.get("url", "")
-        if not fp.exists() and not url and ah.get("status") != "failed":
-            # 文件丢失且不是已标记失败的 → 标记 interrupted，等刷新重试
-            ah["interrupted"] = True
-            ah["error"] = "文件丢失，等待重试"
-
-    # 写回 interrupted 标记
-    data = store._read()
-    for p in data["projects"]:
-        if p["id"] == project_id:
-            for ep_in in p["episodes"]:
-                if ep_in["id"] == episode_id:
-                    for d in ep_in["dialogues"]:
-                        if d["id"] == dialogue_id:
-                            store._write(data)
-                            break
-                    break
-            break
-
+    await _refresh_single_dialogue(project_id, episode_id, dlg)
     return get_episode(project_id, episode_id)
 
 
@@ -819,6 +1104,9 @@ async def api_regenerate_from(project_id: str, episode_id: str, body: EpisodeGen
     if not proj:
         raise HTTPException(404, "Project not found")
 
+    # 确保旁白、场景等虚拟角色在项目中存在
+    _ensure_virtual_chars_in_project(project_id, proj)
+
     # 找到指定集在列表中的索引
     ep_index = None
     for i, ep in enumerate(proj.get("episodes", [])):
@@ -860,9 +1148,7 @@ async def api_regenerate_from(project_id: str, episode_id: str, body: EpisodeGen
             clear_audio_history(project_id, episode_id, d["id"])
 
     # 3. 构建上下文：已有剧集摘要（含当前集）
-    chars_info = []
-    for c in proj.get("characters", []):
-        chars_info.append(f"- {c['name']} (voice: {c.get('voice_id', '默认')}, 描述: {c.get('description', '无')})")
+    chars_info = _build_chars_info(proj)
 
     # 已有剧集摘要（含当前集及之前）
     existing_eps = []
@@ -878,7 +1164,7 @@ async def api_regenerate_from(project_id: str, episode_id: str, body: EpisodeGen
 - 角色去留、生死、关系变化前后一致
 - 标题只写纯标题，不要加"第X集"前缀
 
-返回 JSON：{"story_arc": "一句话故事弧线", "episodes": [{"title": "纯标题，不含集数", "summary": "摘要（含角色去留变化）", "arc_phase": "铺垫|发展|高潮|结局"}]}"""
+返回 JSON：{"story_arc": "一句话故事弧线", "episodes": [{"title": "纯标题，不含集数", "summary": "摘要（含角色去留变化）", "arc_phase": "铺垫|发展|高潮|结局|完整故事线"}]}"""
 
     # 主线从前情提要推断，description 作为可选的走向微调指令
     if body.description.strip():
@@ -891,7 +1177,10 @@ async def api_regenerate_from(project_id: str, episode_id: str, body: EpisodeGen
         user_content += f"前情提要（请在此基础上续写，保持故事连贯）：\n" + "\n".join(existing_eps) + "\n\n"
     if body.extra:
         user_content += f"额外要求：{body.extra}\n\n"
-    user_content += f"请从下一集开始，生成 {body.num_episodes} 集大纲。故事主线不变，保持角色和设定一致。"
+    if body.num_episodes == 1:
+        user_content += f"请从下一集开始，生成 1 集大纲。这是唯一一集，需要包含完整故事线（起承转合），arc_phase 必须为「完整故事线」。故事主线不变，保持角色和设定一致。"
+    else:
+        user_content += f"请从下一集开始，生成 {body.num_episodes} 集大纲。故事主线不变，保持角色和设定一致。"
 
     try:
         result = chat_json([
@@ -909,6 +1198,9 @@ async def api_regenerate_from(project_id: str, episode_id: str, body: EpisodeGen
         title = _re.sub(r'^第\s*\d+\s*集[《》]?\s*', '', ep_data.get("title", "未命名剧集")).strip() or "未命名剧集"
         summary = ep_data.get("summary", "")
         arc_phase = ep_data.get("arc_phase", "")
+        # 单集强制使用"完整故事线"
+        if body.num_episodes == 1:
+            arc_phase = "完整故事线"
         full_summary = f"[{arc_phase}] {summary}" if arc_phase else summary
         ep = create_episode(project_id, title)
         if ep and full_summary:
@@ -932,14 +1224,15 @@ async def api_generate_episodes(project_id: str, body: EpisodeGenRequest):
     if not proj:
         raise HTTPException(404, "Project not found")
 
+    # 确保旁白、场景等虚拟角色在项目中存在
+    _ensure_virtual_chars_in_project(project_id, proj)
+
     llm_cfg = get_llm_config()
     if not llm_cfg.get("base_url") or not llm_cfg.get("api_key"):
         raise HTTPException(400, "LLM 未配置，请先填写 app/config.yaml 中的 llm.base_url 和 llm.api_key")
 
     # 已有角色信息
-    chars_info = []
-    for c in proj.get("characters", []):
-        chars_info.append(f"- {c['name']} (voice: {c.get('voice_id', '默认')}, 描述: {c.get('description', '无')})")
+    chars_info = _build_chars_info(proj)
 
     # 已有剧集摘要（上下文记忆）
     existing_eps = []
@@ -955,7 +1248,7 @@ async def api_generate_episodes(project_id: str, body: EpisodeGenRequest):
 - 角色去留、生死、关系变化前后一致
 - 标题只写纯标题，不要加"第X集"前缀
 
-返回 JSON：{"story_title": "故事标题（2-6个字，精炼有吸引力）", {"story_arc": "一句话故事弧线", "episodes": [{"title": "纯标题，不含集数", "summary": "摘要（含角色去留变化）", "arc_phase": "铺垫|发展|高潮|结局"}]}"""
+返回 JSON：{"story_title": "故事标题（2-6个字，精炼有吸引力）", "story_arc": "一句话故事弧线", "episodes": [{"title": "纯标题，不含集数", "summary": "摘要（含角色去留变化）", "arc_phase": "铺垫|发展|高潮|结局|完整故事线"}]}"""
 
     user_content = f"故事描述：{body.description}\n\n"
     if chars_info:
@@ -964,7 +1257,10 @@ async def api_generate_episodes(project_id: str, body: EpisodeGenRequest):
         user_content += f"已有剧集（续写时请保持连贯）：\n" + "\n".join(existing_eps) + "\n\n"
     if body.extra:
         user_content += f"额外要求：{body.extra}\n\n"
-    user_content += f"生成 {body.num_episodes} 集大纲。"
+    if body.num_episodes == 1:
+        user_content += f"生成 1 集大纲，这是唯一一集，需要包含完整故事线（起承转合），arc_phase 必须为「完整故事线」。"
+    else:
+        user_content += f"生成 {body.num_episodes} 集大纲。"
 
     try:
         result = chat_json([
@@ -981,6 +1277,9 @@ async def api_generate_episodes(project_id: str, body: EpisodeGenRequest):
         title = _re.sub(r'^第\s*\d+\s*集[《》]?\s*', '', ep_data.get("title", "未命名剧集")).strip() or "未命名剧集"
         summary = ep_data.get("summary", "")
         arc_phase = ep_data.get("arc_phase", "")
+        # 单集强制使用"完整故事线"
+        if body.num_episodes == 1:
+            arc_phase = "完整故事线"
         full_summary = f"[{arc_phase}] {summary}" if arc_phase else summary
         ep = create_episode(project_id, title)
         if ep and full_summary:
@@ -1003,6 +1302,9 @@ async def api_generate_dialogues(project_id: str, episode_id: str, body: Dialogu
     if not proj:
         raise HTTPException(404, "Project not found")
 
+    # 确保旁白、场景等虚拟角色在项目中存在
+    _ensure_virtual_chars_in_project(project_id, proj)
+
     ep = get_episode(project_id, episode_id)
     if not ep:
         raise HTTPException(404, "Episode not found")
@@ -1015,10 +1317,8 @@ async def api_generate_dialogues(project_id: str, episode_id: str, body: Dialogu
     if not episode_summary:
         raise HTTPException(400, "该剧集没有摘要，请先生成或填写摘要")
 
-    # 已有角色
-    chars_info = []
-    for c in proj.get("characters", []):
-        chars_info.append(f"- {c['name']} (voice: {c.get('voice_id', '默认')}, 性格/描述: {c.get('description', '无')})")
+    # 已有角色（含基础朗读风格 base_instruct）
+    chars_info = _build_chars_info(proj, detailed=True)
 
     # 上下文：前面所有剧集的完整摘要（不能截断，避免剧情矛盾）
     prev_summaries = []
@@ -1044,6 +1344,8 @@ async def api_generate_dialogues(project_id: str, episode_id: str, body: Dialogu
             position_hint = "故事处于发展阶段，冲突正在升级。"
         else:
             position_hint = "故事接近高潮，矛盾即将爆发。"
+    else:
+        position_hint = "这是唯一一集，需要在有限空间内讲完整个故事。"
 
     # 已有对白
     existing_dialogues = []
@@ -1067,11 +1369,14 @@ async def api_generate_dialogues(project_id: str, episode_id: str, body: Dialogu
 - 共 {num_scenes} 幕，每幕有明确的叙事功能（铺垫/冲突/转折/高潮/收尾等）
 - 总条数约 {target_total} 条，旁白比例约 {body.narration_ratio}%
 - type 说明：narration=旁白为主，dialogue=对话为主，mixed=混合
-- 各幕条数之和必须等于 {target_total}"""
+- 各幕条数之和必须等于 {target_total}
+- 角色的行为、对话风格、情感反应必须符合其性格特征和基础风格"""
 
     plan_user = f"标题：{ep['title']}\n摘要：{episode_summary}\n"
     if chars_info:
-        plan_user += f"角色：{'、'.join(c.split(' (')[0] for c in chars_info)}\n"
+        plan_user += "角色信息（性格+朗读风格，角色行为需符合其性格）：\n"
+        for c in chars_info:
+            plan_user += f"  {c}\n"
     if prev_summaries:
         plan_user += f"前情：{'；'.join(s[:60] for s in prev_summaries)}\n"
     if body.instruction:
@@ -1127,9 +1432,14 @@ async def api_generate_dialogues(project_id: str, episode_id: str, body: Dialogu
             write_system = (
                 "你是一个有声故事编剧。\n\n"
                 "严格输出 JSON，不要输出任何其他文字（不要解释、不要总结）：\n"
-                '{"dialogues":[{"character":"角色名","text":"对白内容","instruct":"朗读指导"}]}\n\n'
+                '{"dialogues":[{"character":"角色名","text":"对白内容","instruct":"此处场景情绪"}]}\n\n'
                 f"必须生成恰好 {still_need} 条对白，{scene_type} 类型（{type_desc}），"
-                "旁白和角色对话交替，每条 15-40 字，只用给定角色。"
+                "每条 15-40 字，只用给定角色。\n\n"
+                "【instruct 规则】\n"
+                "- instruct 是此条白在此场景下的情绪/语气提示，会叠加到角色基础风格上\n"
+                "- 格式：直接写情绪词，如'略带紧张'、'低沉'、'温和'、'叙述性'\n"
+                "- 同一角色的 instruct 基调应保持一致，允许小幅变化但不要剧烈跳跃\n"
+                "- 示例：'略带紧张'、'低沉叙述'、'温和'、'平静略带感慨'\n"
                 f"dialogues 数组长度必须等于 {still_need}。"
             )
 
@@ -1279,9 +1589,7 @@ async def api_generate_next_episode(project_id: str, episode_id: str):
         if prev_ep.get("summary"):
             prev_summaries.append(f"《{prev_ep['title']}》: {prev_ep['summary']}")
 
-    chars_info = []
-    for c in proj.get("characters", []):
-        chars_info.append(f"- {c['name']} (描述: {c.get('description', '无')})")
+    chars_info = _build_chars_info(proj)
 
     system_prompt = """你是一个专业的编剧助手，负责生成下一集内容。
 根据前情提要和当前剧情，生成下一集的标题、摘要。

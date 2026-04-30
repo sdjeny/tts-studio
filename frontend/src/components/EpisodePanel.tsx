@@ -22,6 +22,8 @@ export default function EpisodePanel({ project, onChange, onError }: {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [batchMode, setBatchMode] = useState<"pending" | "all">("pending");
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState<string | null>(null);
+  const [batchRefreshProgress, setBatchRefreshProgress] = useState<Record<string, { current: number; total: number; errors: string[] }>>({});
   const importFileInputRef = useRef<HTMLInputElement>(null);
 
   // 批量换角 state
@@ -62,19 +64,60 @@ export default function EpisodePanel({ project, onChange, onError }: {
     const label = batchMode === "all" ? "全部重新生成" : "仅生成未生成过的";
     if (!confirm(`[${label}] 对 ${targets.length} 条对白生成音频？`)) return;
 
-    let count = 0;
-    for (const d of targets) {
-      try {
-        await api.generateAudio(project.id, ep.id, d.id);
-        count++;
-      } catch (e: any) {
-        onError(e.message);
-        break;
-      }
+    // 用 SSE 流式接收进度，不等下载完成
+    const dlgIds = targets.map((d: any) => d.id);
+    const body = JSON.stringify({ dialogue_ids: dlgIds });
+    let submitted = 0;
+    let failedCount = 0;
+    let done = false;
+
+    // 先用 fetch 拿到 response body 作为 ReadableStream
+    const resp = await fetch(
+      `/api/projects/${project.id}/episodes/${ep.id}/generate-batch`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body }
+    );
+    if (!resp.ok) {
+      onError("批量生成请求失败: " + resp.statusText);
+      return;
     }
-    onChange();
-    if (count > 0) {
-      onError(`✅ 已提交 ${count}/${targets.length} 条，正在后台生成中...`);
+
+    const reader = resp.body!.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+
+    while (!done) {
+      const { value, done: streamDone } = await reader.read();
+      if (streamDone) break;
+      buf += decoder.decode(value, { stream: true });
+
+      // 按 SSE 格式解析：每条以 \n\n 分隔
+      const parts = buf.split("\n\n");
+      buf = parts.pop() || ""; // 保留不完整的最后一段
+
+      for (const part of parts) {
+        const line = part.trim();
+        if (!line.startsWith("data: ")) continue;
+        try {
+          const msg = JSON.parse(line.slice(6));
+          if (msg.status === "submitted") {
+            submitted++;
+            onError(`⏳ 已提交 ${submitted}/${msg.total} 条...`);
+          } else if (msg.status === "error") {
+            failedCount++;
+            onError(`⚠ 第 ${msg.index + 1} 条失败: ${msg.error}`);
+          } else if (msg.status === "done") {
+            done = true;
+            onChange(); // 刷新一次获取最新状态
+            if (failedCount > 0) {
+              onError(`✅ 完成！成功 ${msg.submitted}/${msg.total} 条，${msg.failed_count} 条失败`);
+            } else {
+              onError(`✅ 全部提交成功！${msg.submitted}/${msg.total} 条，后台生成中...`);
+            }
+          }
+        } catch {
+          // 忽略解析错误
+        }
+      }
     }
   };
 
@@ -263,11 +306,35 @@ export default function EpisodePanel({ project, onChange, onError }: {
                 onClick={() => setExpanded(expanded === ep.id ? null : ep.id)}
                 style={{ padding: "14px 18px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}
               >
-                <div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <span style={{ fontWeight: 600 }}>📺 {ep.title}</span>
-                  <span style={{ color: "#64748b", marginLeft: 10, fontSize: 13 }}>
+                  <span style={{ color: "#64748b", fontSize: 13 }}>
                     {ep.dialogues.length} 条对白
                   </span>
+                  {/* 剧集风格开关 */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const newVal = !ep.style_enabled;
+                      // 乐观更新 UI
+                      ep.style_enabled = newVal;
+                      api.updateEpisode(project.id, ep.id, { style_enabled: newVal })
+                        .then(() => onChange())
+                        .catch((err: any) => { onError(err.message); onChange(); });
+                    }}
+                    style={{
+                      fontSize: 10,
+                      padding: "1px 6px",
+                      borderRadius: 4,
+                      border: "1px solid",
+                      borderColor: ep.style_enabled ? "#f59e0b" : "#334155",
+                      background: ep.style_enabled ? "#f59e0b22" : "transparent",
+                      color: ep.style_enabled ? "#f59e0b" : "#64748b",
+                      cursor: "pointer",
+                    }}
+                  >
+                    🎭 风格{ep.style_enabled ? "开" : "关"}
+                  </button>
                 </div>
                 <div style={{ display: "flex", gap: 6 }}>
                   <span style={{ color: "#64748b", fontSize: 18 }}>{expanded === ep.id ? "▾" : "▸"}</span>
@@ -328,17 +395,91 @@ export default function EpisodePanel({ project, onChange, onError }: {
                     </div>
 
                     <button onClick={() => dlAll(ep.id)} style={smallBtn}>⬇ 下载全部音频</button>
-                    <button onClick={async () => {
-                      if (expanded) {
-                        const ep = project.episodes.find((e: any) => e.id === expanded);
-                        if (ep) {
-                          for (const d of ep.dialogues) {
-                            try { await api.refreshDialogue(project.id, ep.id, d.id); } catch {}
-                          }
-                        }
-                      }
-                      onChange();
-                    }} style={{ ...smallBtn, color: "#3b82f6", borderColor: "#3b82f6" }}>🔄 刷新状态</button>
+                    {(() => {
+                      const curEp = project.episodes.find((e: any) => e.id === expanded) || ep;
+                      const hasGenerating = curEp.dialogues?.some((d: any) =>
+                        d.audio_history?.some((a: any) => a.status === "generating")
+                      );
+                      const isRefreshing = refreshing === curEp.id;
+                      const refreshProgress = batchRefreshProgress[curEp.id];
+                      return (
+                        <>
+                          <button
+                            onClick={async () => {
+                              if (!hasGenerating) return;
+                              setRefreshing(curEp.id);
+                              setBatchRefreshProgress(prev => ({ ...prev, [curEp.id]: { current: 0, total: curEp.dialogues.length, errors: [] } }));
+                              onError("");
+
+                              const dlgIds = curEp.dialogues.map((d: any) => d.id);
+                              const resp = await api.generateBatchRefresh(project.id, curEp.id, dlgIds);
+                              if (!resp.ok) {
+                                onError("批量刷新请求失败: " + resp.statusText);
+                                setRefreshing(null);
+                                setBatchRefreshProgress(prev => { const n = { ...prev }; delete n[curEp.id]; return n; });
+                                return;
+                              }
+
+                              const reader = resp.body!.getReader();
+                              const decoder = new TextDecoder();
+                              let buf = "";
+                              let done = false;
+
+                              while (!done) {
+                                const { value, done: streamDone } = await reader.read();
+                                if (streamDone) break;
+                                buf += decoder.decode(value, { stream: true });
+
+                                const parts = buf.split("\n\n");
+                                buf = parts.pop() || "";
+
+                                for (const part of parts) {
+                                  const line = part.trim();
+                                  if (!line.startsWith("data: ")) continue;
+                                  try {
+                                    const msg = JSON.parse(line.slice(6));
+                                    if (msg.status === "ok" || msg.status === "error") {
+                                      setBatchRefreshProgress(prev => ({
+                                        ...prev,
+                                        [curEp.id]: {
+                                          current: msg.index + 1,
+                                          total: msg.total,
+                                          errors: msg.status === "error"
+                                            ? [...(prev[curEp.id]?.errors || []), msg.error]
+                                            : (prev[curEp.id]?.errors || []),
+                                        },
+                                      }));
+                                    } else if (msg.status === "done") {
+                                      done = true;
+                                      onChange();
+                                      if (msg.failed_count > 0) {
+                                        onError(`🔄 刷新完成：${msg.ok}/${msg.total} 条成功，${msg.failed_count} 条失败`);
+                                      } else {
+                                        onError(`✅ 已刷新 ${msg.ok}/${msg.total} 条对白状态`);
+                                      }
+                                    }
+                                  } catch { /* ignore parse errors */ }
+                                }
+                              }
+
+                              setRefreshing(null);
+                              setBatchRefreshProgress(prev => { const n = { ...prev }; delete n[curEp.id]; return n; });
+                            }}
+                            disabled={!hasGenerating || isRefreshing}
+                            title={hasGenerating ? "刷新所有对白的生成状态" : "当前没有进行中的生成任务"}
+                            style={{
+                              ...smallBtn,
+                              color: hasGenerating || isRefreshing ? "#3b82f6" : "#64748b",
+                              borderColor: hasGenerating || isRefreshing ? "#3b82f6" : "#334155",
+                              cursor: hasGenerating || isRefreshing ? "pointer" : "not-allowed",
+                              opacity: isRefreshing ? 0.7 : 1,
+                            }}
+                          >
+                            {isRefreshing ? `⏳ 刷新中 ${refreshProgress ? `${refreshProgress.current}/${refreshProgress.total}` : "..."}` : hasGenerating ? "🔄 刷新状态" : "🔄 无进行中"}
+                          </button>
+                        </>
+                      );
+                    })()}
 
                     {/* 导入导出 */}
                     <button onClick={() => exportEpisode(ep)} style={{ ...smallBtn, color: "#f59e0b", borderColor: "#f59e0b" }}>📤 导出</button>

@@ -26,6 +26,7 @@ async def submit_tts(text: str, speaker: str = "", speed: float = 1.0,
     """
     提交 TTS 任务，立即返回 task_id。
     失败则 raise Exception。
+    instruct 格式：角色基础风格 + 场景情绪，如 '沉稳略带磁性，此处略带紧张'
     """
     client = get_client()
 

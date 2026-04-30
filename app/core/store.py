@@ -56,7 +56,18 @@ def _uid() -> str:
 # ─── Projects ────────────────────────────────────────────────
 
 def list_projects() -> list[dict]:
-    return _read()["projects"]
+    data = _read()
+    projects = data["projects"]
+    # 数据迁移：旧项目没有 updated_at 的，用 created_at 填充
+    dirty = False
+    for p in projects:
+        if not p.get("updated_at"):
+            p["updated_at"] = p.get("created_at", "")
+            dirty = True
+    if dirty:
+        _write(data)
+    # 按 updated_at 倒序排列
+    return sorted(projects, key=lambda p: p.get("updated_at", ""), reverse=True)
 
 
 def get_project(project_id: str) -> dict | None:
@@ -69,10 +80,12 @@ def get_project(project_id: str) -> dict | None:
 def create_project(name: str) -> dict:
     _ensure_data_dir()
     data = _read()
+    now = _now()
     project = {
         "id": _uid(),
         "name": name,
-        "created_at": _now(),
+        "created_at": now,
+        "updated_at": now,
         "characters": [],
         "episodes": [],
     }
@@ -89,6 +102,16 @@ def update_project(project_id: str, name: str) -> dict | None:
             _write(data)
             return p
     return None
+
+
+def touch_project(project_id: str) -> None:
+    """更新项目的 updated_at 时间戳。"""
+    data = _read()
+    for p in data["projects"]:
+        if p["id"] == project_id:
+            p["updated_at"] = _now()
+            _write(data)
+            return
 
 
 def delete_project(project_id: str) -> bool:
@@ -180,6 +203,7 @@ def create_episode(project_id: str, title: str) -> dict | None:
                 "id": _uid(),
                 "title": title,
                 "summary": "",
+                "style_enabled": True,  # 剧集默认启用风格
                 "created_at": _now(),
                 "dialogues": [],
             }
@@ -249,6 +273,7 @@ def add_dialogue(project_id: str, episode_id: str, character_id: str,
                         "text": text,
                         "summary": "",
                         "instruct": instruct,
+                        "style_enabled": False,  # True=角色风格+场景情绪, False=仅角色风格（默认关闭）
                         "order": order,
                         "status": "pending",  # pending | generating | completed | failed
                         "audio_history": [],   # [{id, url, filename, created_at}]
@@ -270,6 +295,20 @@ def update_dialogue(project_id: str, episode_id: str, dialogue_id: str, **fields
                     for dlg in ep["dialogues"]:
                         if dlg["id"] == dialogue_id:
                             dlg.update(fields)
+                            # 如果更新了 character_id，自动同步 character_name
+                            if "character_id" in fields:
+                                cid = fields["character_id"]
+                                if cid == "__旁白__":
+                                    dlg["character_name"] = "旁白"
+                                elif cid == "__场景__":
+                                    dlg["character_name"] = "场景"
+                                else:
+                                    char_name = ""
+                                    for c in p["characters"]:
+                                        if c["id"] == cid:
+                                            char_name = c["name"]
+                                            break
+                                    dlg["character_name"] = char_name or f"⚠ 角色异常({cid[:8]})"
                             _write(data)
                             return dlg
     return None

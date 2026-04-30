@@ -89,6 +89,10 @@ export default function DialogueList({ project, episode, onChange, onError }: {
               dlg={dlg}
               index={idx}
               onGenerate={() => generate(dlg.id)}
+              onRefresh={async () => {
+                try { await api.refreshDialogue(project.id, episode.id, dlg.id); } catch {}
+                onChange();
+              }}
               onClearHistory={() => clearHistory(dlg.id)}
               onDownload={(audioId) => download(dlg.id, audioId)}
               onActivate={(audioId) => activateAudio(dlg.id, audioId)}
@@ -160,12 +164,12 @@ export default function DialogueList({ project, episode, onChange, onError }: {
 
 /* ── 单条行 ─────────────────────────────────────── */
 
-function DialogueRow({ dlg, index, onGenerate, onClearHistory, onDownload, onDelete, onUpdate, onActivate, onRemoveAudio, characters }: {
+function DialogueRow({ dlg, index, onGenerate, onRefresh, onClearHistory, onDownload, onDelete, onUpdate, onActivate, onRemoveAudio, characters }: {
   dlg: Dialogue; index: number;
-  onGenerate: () => void; onClearHistory: () => void;
+  onGenerate: () => void; onRefresh: () => void; onClearHistory: () => void;
   onDownload: (audioId: string) => void;
   onDelete: () => void;
-  onUpdate: (data: { character_id?: string; text?: string; instruct?: string }) => void;
+  onUpdate: (data: { character_id?: string; text?: string; instruct?: string; style_enabled?: boolean }) => void;
   onActivate: (audioId: string) => void;
   onRemoveAudio: (audioId: string) => void;
   characters: Character[];
@@ -178,7 +182,6 @@ function DialogueRow({ dlg, index, onGenerate, onClearHistory, onDownload, onDel
 
   const currentAudio = dlg.audio_history?.find(a => a.id === dlg.current_audio_id);
 
-  const isNarrator = dlg.character_name === "旁白";
   const isScene = dlg.character_name === "场景";
 
   const statusColors: Record<string, string> = {
@@ -188,9 +191,9 @@ function DialogueRow({ dlg, index, onGenerate, onClearHistory, onDownload, onDel
     pending: "待生成", generating: "生成中...", completed: "已完成", failed: "失败",
   };
 
-  // 不同类型的卡片样式
-  const rowBg = isNarrator ? "#0c1222" : isScene ? "#1a1a0e" : "#0f1117";
-  const rowBorder = isNarrator ? "#1e3a5f" : isScene ? "#5c4b00" : "#1e293b";
+  // 场景有特殊卡片样式，旁白和普通角色一致
+  const rowBg = isScene ? "#1a1a0e" : "#0f1117";
+  const rowBorder = isScene ? "#5c4b00" : "#1e293b";
 
   return (
     <div style={{ background: rowBg, border: `1px solid ${rowBorder}`, borderRadius: 8, padding: "10px 14px" }}>
@@ -198,21 +201,15 @@ function DialogueRow({ dlg, index, onGenerate, onClearHistory, onDownload, onDel
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
         <span style={{ color: "#475569", fontSize: 12, minWidth: 24 }}>#{index + 1}</span>
 
-        {isScene ? (
-          <span style={tagStyle("#eab308")}>🎬 场景</span>
-        ) : isNarrator ? (
-          <span style={tagStyle("#60a5fa")}>📖 旁白</span>
-        ) : (
-          <select value={editCharId} onChange={(e) => { setEditCharId(e.target.value); onUpdate({ character_id: e.target.value }); }}
-            style={{ ...inputSm, padding: "2px 6px", fontSize: 12, width: "auto", minWidth: 80 }}>
-            <option value="__旁白__">📖 旁白</option>
-            <option value="__场景__">🎬 场景</option>
-            {characters.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-            {editCharId && editCharId !== "__旁白__" && editCharId !== "__场景__" && !characters.find(c => c.id === editCharId) && (
-              <option value={editCharId}>⚠ 异常({editCharId.slice(0, 8)})</option>
-            )}
-          </select>
-        )}
+        <select value={editCharId} onChange={(e) => { setEditCharId(e.target.value); onUpdate({ character_id: e.target.value }); }}
+          style={{ ...inputSm, padding: "2px 6px", fontSize: 12, width: "auto", minWidth: 80 }}>
+          <option value="__旁白__">📖 旁白</option>
+          <option value="__场景__">🎬 场景</option>
+          {characters.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          {editCharId && editCharId !== "__旁白__" && editCharId !== "__场景__" && !characters.find(c => c.id === editCharId) && (
+            <option value={editCharId}>⚠ 异常({editCharId.slice(0, 8)})</option>
+          )}
+        </select>
 
         <span style={{ color: statusColors[dlg.status] || "#64748b", fontSize: 11 }}>
           ● {statusLabels[dlg.status] || dlg.status}
@@ -220,6 +217,23 @@ function DialogueRow({ dlg, index, onGenerate, onClearHistory, onDownload, onDel
         {dlg.audio_history?.length > 0 && (
           <span style={{ color: "#475569", fontSize: 11 }}>({dlg.audio_history.length} 条历史)</span>
         )}
+
+        {/* 风格开关 */}
+        <button
+          onClick={() => onUpdate({ style_enabled: !dlg.style_enabled })}
+          style={{
+            fontSize: 10,
+            padding: "1px 6px",
+            borderRadius: 4,
+            border: "1px solid",
+            borderColor: dlg.style_enabled ? "#f59e0b" : "#334155",
+            background: dlg.style_enabled ? "#f59e0b22" : "transparent",
+            color: dlg.style_enabled ? "#f59e0b" : "#64748b",
+            cursor: "pointer",
+          }}
+        >
+          {dlg.style_enabled ? "🎭 风格" : "🎭 风格"}
+        </button>
       </div>
 
       {/* 内容 */}
@@ -230,13 +244,24 @@ function DialogueRow({ dlg, index, onGenerate, onClearHistory, onDownload, onDel
               📋 {dlg.summary}
             </div>
           )}
+          <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+            <select value={editCharId} onChange={(e) => setEditCharId(e.target.value)}
+              style={{ ...inputSm, padding: "2px 6px", fontSize: 12, width: "auto", minWidth: 100 }}>
+              <option value="__旁白__">📖 旁白</option>
+              <option value="__场景__">🎬 场景</option>
+              {characters.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <span style={{ fontSize: 12, color: "#64748b", alignSelf: "center" }}>
+              {editCharId === "__旁白__" ? "📖 旁白" : editCharId === "__场景__" ? "🎬 场景" : characters.find(c => c.id === editCharId)?.name || "未知角色"}
+            </span>
+          </div>
           <textarea value={editText} onChange={(e) => setEditText(e.target.value)}
             style={{ ...inputSm, width: "100%", resize: "vertical", minHeight: 60 }} />
           <input value={editInstruct} onChange={(e) => setEditInstruct(e.target.value)}
             placeholder="instruct（如：低沉缓慢、紧张、欢快）"
             style={{ ...inputSm, width: "100%", marginTop: 4 }} />
           <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
-            <button onClick={() => { onUpdate({ text: editText, instruct: editInstruct }); setEditing(false); }}
+            <button onClick={() => { onUpdate({ character_id: editCharId, text: editText, instruct: editInstruct }); setEditing(false); }}
               style={{ ...btnBlue, padding: "3px 10px", fontSize: 12 }}>保存</button>
             <button onClick={() => setEditing(false)} style={{ ...btnGhost, padding: "3px 10px", fontSize: 12 }}>取消</button>
           </div>
@@ -255,14 +280,6 @@ function DialogueRow({ dlg, index, onGenerate, onClearHistory, onDownload, onDel
               background: "#5c4b0015", borderRadius: 4, borderLeft: "3px solid #eab308",
             }}>
               🎬 {dlg.text}
-            </div>
-          ) : isNarrator ? (
-            <div style={{
-              fontSize: 14, lineHeight: 1.9, marginBottom: 4, whiteSpace: "pre-wrap",
-              color: "#bfdbfe", padding: "8px 12px",
-              background: "#1e3a5f15", borderRadius: 4, borderLeft: "3px solid #60a5fa",
-            }}>
-              {dlg.text}
             </div>
           ) : (
             <div style={{
@@ -290,9 +307,13 @@ function DialogueRow({ dlg, index, onGenerate, onClearHistory, onDownload, onDel
             {currentAudio ? "🔄 重新生成" : "🔊 生成音频"}
           </button>
         ) : dlg.audio_history?.some(a => a.status === "generating" && a.interrupted) ? (
-          <span style={{ color: "#f97316", fontSize: 12 }}>⚡ 中断，点击刷新重试</span>
+          <button onClick={onRefresh} style={{ ...btnGhost, padding: "3px 10px", fontSize: 12, color: "#f97316", borderColor: "#f97316" }}>
+            ⚡ 刷新重试
+          </button>
         ) : (
-          <span style={{ color: "#f59e0b", fontSize: 12 }}>⏳ 生成中...</span>
+          <button onClick={onRefresh} style={{ ...btnGhost, padding: "3px 10px", fontSize: 12, color: "#f59e0b", borderColor: "#f59e0b" }}>
+            ⏳ 生成中... 🔄 刷新
+          </button>
         )}
 
         {currentAudio && (
@@ -336,9 +357,13 @@ function DialogueRow({ dlg, index, onGenerate, onClearHistory, onDownload, onDel
                 </>
               ) : ah.status === "generating" ? (
                 ah.interrupted ? (
-                  <span style={{ color: "#f97316", fontSize: 11, fontStyle: "italic" }}>⚡ 中断，点击刷新重试{ah.error ? ` (${ah.error})` : ""}</span>
+                  <button onClick={onRefresh} style={{ ...btnGhost, padding: "1px 6px", fontSize: 11, color: "#f97316", borderColor: "#f97316" }}>
+                    ⚡ 刷新重试{ah.error ? ` (${ah.error.slice(0, 20)})` : ""}
+                  </button>
                 ) : (
-                  <span style={{ color: "#f59e0b", fontSize: 11, fontStyle: "italic" }}>⏳ 生成中...</span>
+                  <button onClick={onRefresh} style={{ ...btnGhost, padding: "1px 6px", fontSize: 11, color: "#f59e0b", borderColor: "#f59e0b" }}>
+                    ⏳ 刷新
+                  </button>
                 )
               ) : (
                 <span style={{ color: "#ef4444", fontSize: 11, fontStyle: "italic" }}>❌ {ah.error || "生成失败"}</span>
@@ -360,13 +385,6 @@ function DialogueRow({ dlg, index, onGenerate, onClearHistory, onDownload, onDel
       )}
     </div>
   );
-}
-
-function tagStyle(color: string): React.CSSProperties {
-  return {
-    padding: "2px 8px", borderRadius: 4, fontSize: 12, fontWeight: 600,
-    background: color + "22", color,
-  };
 }
 
 const inputSm: React.CSSProperties = {

@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from app.core.store import (
     list_projects, get_project, create_project, update_project, delete_project,
     project_characters, add_character, update_character, delete_character,
+    touch_project,
 )
 
 from app.core.audio_effects import (
@@ -35,6 +36,7 @@ class CharacterCreate(BaseModel):
     speed: float = 1.0
     pitch: float = 1.0
     description: str = ""
+    base_instruct: str = ""
     audio_effects: list[dict] = []
 
 
@@ -44,6 +46,7 @@ class CharacterUpdate(BaseModel):
     speed: float | None = None
     pitch: float | None = None
     description: str | None = None
+    base_instruct: str | None = None
     audio_effects: list[dict] | None = None
 
 
@@ -72,6 +75,7 @@ async def api_update_project(project_id: str, body: ProjectUpdate):
     p = update_project(project_id, body.name)
     if not p:
         raise HTTPException(404, "Project not found")
+    touch_project(project_id)
     return p
 
 
@@ -93,11 +97,14 @@ async def api_list_characters(project_id: str):
 async def api_add_character(project_id: str, body: CharacterCreate):
     if not get_project(project_id):
         raise HTTPException(404, "Project not found")
-    return add_character(
+    char = add_character(
         project_id, body.name, body.voice_id,
         body.speed, body.pitch, body.description,
         audio_effects=body.audio_effects,
+        base_instruct=body.base_instruct,
     )
+    touch_project(project_id)
+    return char
 
 
 @router.patch("/projects/{project_id}/characters/{char_id}")
@@ -106,6 +113,7 @@ async def api_update_character(project_id: str, char_id: str, body: CharacterUpd
     c = update_character(project_id, char_id, **fields)
     if not c:
         raise HTTPException(404, "Character not found")
+    touch_project(project_id)
     return c
 
 
@@ -113,6 +121,7 @@ async def api_update_character(project_id: str, char_id: str, body: CharacterUpd
 async def api_delete_character(project_id: str, char_id: str):
     if not delete_character(project_id, char_id):
         raise HTTPException(404, "Character not found")
+    touch_project(project_id)
     return {"ok": True}
 
 

@@ -39,6 +39,7 @@ export interface Character {
   speed: number;
   pitch: number;
   description: string;
+  base_instruct: string;
   audio_effects: AudioEffect[];
   created_at: string;
 }
@@ -63,6 +64,7 @@ export interface Dialogue {
   text: string;
   summary: string;
   instruct: string;
+  style_enabled?: boolean;
   order: number;
   status: string;
   audio_history: AudioRecord[];
@@ -75,6 +77,7 @@ export interface Episode {
   title: string;
   summary: string;
   dialogues: Dialogue[];
+  style_enabled?: boolean;
   created_at: string;
 }
 
@@ -84,6 +87,7 @@ export interface Project {
   characters: Character[];
   episodes: Episode[];
   created_at: string;
+  updated_at?: string;
 }
 
 // ── API ─────────────────────────────────────────────────
@@ -126,7 +130,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ title }),
     }),
-  updateEpisode: (pid: string, eid: string, data: { title?: string; summary?: string }) =>
+  updateEpisode: (pid: string, eid: string, data: { title?: string; summary?: string; style_enabled?: boolean }) =>
     request<Episode>(`/projects/${pid}/episodes/${eid}`, {
       method: "PATCH",
       body: JSON.stringify(data),
@@ -147,7 +151,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(items),
     }),
-  updateDialogue: (pid: string, eid: string, dlgId: string, data: { character_id?: string; text?: string; instruct?: string; order?: number }) =>
+  updateDialogue: (pid: string, eid: string, dlgId: string, data: { character_id?: string; text?: string; instruct?: string; order?: number; style_enabled?: boolean }) =>
     request<Dialogue>(`/projects/${pid}/episodes/${eid}/dialogues/${dlgId}`, {
       method: "PATCH",
       body: JSON.stringify(data),
@@ -174,12 +178,27 @@ export const api = {
       { method: "POST" }
     ),
 
+  // batch generate audio for all dialogues in an episode
+  generateBatchAudio: (pid: string, eid: string, dialogueIds: string[]) =>
+    request<{ total: number; submitted: number; failed: any[] }>(
+      `/projects/${pid}/episodes/${eid}/generate-batch`,
+      { method: "POST", body: JSON.stringify({ dialogue_ids: dialogueIds }) }
+    ),
+
   // refresh dialogue (fix missing files)
   refreshDialogue: (pid: string, eid: string, dlgId: string) =>
     request<Dialogue>(
       `/projects/${pid}/episodes/${eid}/dialogues/${dlgId}/refresh`,
       { method: "POST" }
     ),
+
+  // batch refresh dialogues (SSE stream)
+  generateBatchRefresh: (pid: string, eid: string, dialogueIds: string[]) =>
+    fetch(`${BASE}/projects/${pid}/episodes/${eid}/refresh-batch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dialogue_ids: dialogueIds }),
+    }),
 
   // clear audio history
   clearAudioHistory: (pid: string, eid: string, dlgId: string) =>
@@ -274,8 +293,8 @@ export const api = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ effects_chain: effectsChain, character_id: characterId ?? null }),
-    }).then(r => {
-      if (!r.ok) throw new Error(`${r.status}: ${r.text()}`);
+    }).then(async r => {
+      if (!r.ok) throw new Error(`${r.status}: ${await r.text()}`);
       return r.blob();
     }),
 
@@ -317,7 +336,7 @@ export const api = {
   addTimelineTrack: (pid: string, eid: string, name: string, type: string = "dialogue") =>
     request<{ track: any }>(`/projects/${pid}/episodes/${eid}/timeline/tracks`, {
       method: "POST", body: JSON.stringify({ name, type }) },
-    }),
+    ),
 
   updateTimelineTrack: (pid: string, eid: string, trackId: string, data: Record<string, any>) =>
     request<{ track: any }>(`/projects/${pid}/episodes/${eid}/timeline/tracks/${trackId}`, {
@@ -360,6 +379,6 @@ export const api = {
       `/projects/${pid}/episodes/${eid}/timeline/snapshots/${version}/restore`,
       { method: "POST" },
     ),
-};
+}
 
 export type { Project as ProjectType };
