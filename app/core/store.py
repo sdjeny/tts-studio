@@ -58,11 +58,21 @@ def _uid() -> str:
 def list_projects() -> list[dict]:
     data = _read()
     projects = data["projects"]
-    # 数据迁移：旧项目没有 updated_at 的，用 created_at 填充
+    # 数据迁移
     dirty = False
     for p in projects:
         if not p.get("updated_at"):
             p["updated_at"] = p.get("created_at", "")
+            dirty = True
+        # 迁移：旧项目补充 tts_defaults 默认值
+        if not p.get("tts_defaults"):
+            p["tts_defaults"] = {
+                "temperature": 0.3,
+                "do_sample": True,
+                "top_k": 20,
+                "top_p": 0.85,
+                "repetition_penalty": 1.1,
+            }
             dirty = True
     if dirty:
         _write(data)
@@ -88,17 +98,36 @@ def create_project(name: str) -> dict:
         "updated_at": now,
         "characters": [],
         "episodes": [],
+        # ── 项目级 TTS 默认参数 ────────────────────────────────
+        # 当对白生成音频时未显式指定采样参数，则使用此处的值。
+        # 保守默认值旨在最小化不同句子间的声音波动。
+        "tts_defaults": {
+            "temperature": 0.3,          # 采样温度，越低越稳定（官方默认 0.9）
+            "do_sample": True,           # True=采样 / False=贪心解码
+            "top_k": 20,                 # top-k 采样，越小越集中（官方默认 50）
+            "top_p": 0.85,               # 核采样阈值，越小越集中（官方默认 1.0）
+            "repetition_penalty": 1.1,   # 重复惩罚（官方默认 1.05）
+        },
     }
     data["projects"].append(project)
     _write(data)
     return project
 
 
-def update_project(project_id: str, name: str) -> dict | None:
+def update_project(project_id: str, name: str | None = None, **extra) -> dict | None:
+    """更新项目字段。name 之外的字段（如 tts_defaults）通过 **extra 传入。"""
     data = _read()
     for p in data["projects"]:
         if p["id"] == project_id:
-            p["name"] = name
+            if name is not None:
+                p["name"] = name
+            if extra:
+                # 深度合并：对于嵌套 dict（如 tts_defaults），逐字段更新而非整体替换
+                for k, v in extra.items():
+                    if isinstance(v, dict) and isinstance(p.get(k), dict):
+                        p[k].update(v)
+                    else:
+                        p[k] = v
             _write(data)
             return p
     return None
@@ -203,7 +232,7 @@ def create_episode(project_id: str, title: str) -> dict | None:
                 "id": _uid(),
                 "title": title,
                 "summary": "",
-                "style_enabled": True,  # 剧集默认启用风格
+                "style_enabled": False,  # 剧集默认关闭风格
                 "created_at": _now(),
                 "dialogues": [],
             }
@@ -251,18 +280,12 @@ def add_dialogue(project_id: str, episode_id: str, character_id: str,
         if p["id"] == project_id:
             for ep in p["episodes"]:
                 if ep["id"] == episode_id:
-                    # resolve character name
+                    # resolve character name（仅从真实角色查找）
                     char_name = ""
-                    # 特殊内置角色
-                    if character_id == "__旁白__":
-                        char_name = "旁白"
-                    elif character_id == "__场景__":
-                        char_name = "场景"
-                    else:
-                        for c in p["characters"]:
-                            if c["id"] == character_id:
-                                char_name = c["name"]
-                                break
+                    for c in p["characters"]:
+                        if c["id"] == character_id:
+                            char_name = c["name"]
+                            break
                     if not char_name:
                         char_id_display = character_id[:8] if character_id else "(空)"
                         char_name = f"⚠ 角色异常({char_id_display})"
@@ -298,17 +321,12 @@ def update_dialogue(project_id: str, episode_id: str, dialogue_id: str, **fields
                             # 如果更新了 character_id，自动同步 character_name
                             if "character_id" in fields:
                                 cid = fields["character_id"]
-                                if cid == "__旁白__":
-                                    dlg["character_name"] = "旁白"
-                                elif cid == "__场景__":
-                                    dlg["character_name"] = "场景"
-                                else:
-                                    char_name = ""
-                                    for c in p["characters"]:
-                                        if c["id"] == cid:
-                                            char_name = c["name"]
-                                            break
-                                    dlg["character_name"] = char_name or f"⚠ 角色异常({cid[:8]})"
+                                char_name = ""
+                                for c in p["characters"]:
+                                    if c["id"] == cid:
+                                        char_name = c["name"]
+                                        break
+                                dlg["character_name"] = char_name or f"⚠ 角色异常({cid[:8]})"
                             _write(data)
                             return dlg
     return None

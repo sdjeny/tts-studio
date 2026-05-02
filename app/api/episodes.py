@@ -26,18 +26,12 @@ AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 # TTS 服务支持的音色列表
 _VALID_VOICES = {"aiden", "dylan", "eric", "ono_anna", "ryan", "serena", "sohee", "uncle_fu", "vivian"}
 
-# 虚拟内置角色（不在 proj["characters"] 中，但 LLM 需要感知）
-_VIRTUAL_CHARS = [
-    {"id": "__旁白__", "name": "旁白", "voice_id": "aiden", "base_instruct": "", "description": "旁白叙述者"},
-    {"id": "__场景__", "name": "场景", "voice_id": "aiden", "base_instruct": "", "description": "场景描写"},
-]
-
 
 def _build_chars_info(proj: dict, detailed: bool = False) -> list[str]:
-    """构建角色信息列表，包含真实角色 + 虚拟角色（旁白、场景）。
+    """构建角色信息列表（仅真实角色）。
     detailed=True 时包含 base_instruct（用于对白/大纲生成），False 时只有基础信息。
     """
-    chars = list(proj.get("characters", [])) + _VIRTUAL_CHARS
+    chars = list(proj.get("characters", []))
     result = []
     for c in chars:
         if detailed:
@@ -52,45 +46,6 @@ def _build_chars_info(proj: dict, detailed: bool = False) -> list[str]:
             result.append(f"- {c['name']} (voice: {c.get('voice_id', '默认')}, 描述: {c.get('description', '无')})")
     return result
 
-
-def _ensure_virtual_chars_in_project(project_id: str, proj: dict) -> None:
-    """确保虚拟角色（旁白、场景）在项目的 characters 列表中。
-    如果不存在则自动创建，赋予默认风格和音色。
-    """
-    from app.core.store import add_character
-
-    existing_names = {c["name"] for c in proj.get("characters", [])}
-    # 默认风格映射
-    default_styles = {
-        "旁白": "沉稳叙述、略带磁性",
-        "场景": "平静舒缓、描述性",
-    }
-    default_voices = {
-        "旁白": "dylan",
-        "场景": "sohee",
-    }
-    for vc in _VIRTUAL_CHARS:
-        char_name = vc["name"]
-        if char_name not in existing_names:
-            add_character(
-                project_id,
-                char_name,
-                voice_id=default_voices.get(char_name, "aiden"),
-                description=vc.get("description", ""),
-                base_instruct=default_styles.get(char_name, ""),
-            )
-            # 同步更新内存中的 proj，避免同一请求内重复添加
-            proj["characters"].append({
-                "id": vc["id"],
-                "name": char_name,
-                "voice_id": default_voices.get(char_name, "aiden"),
-                "speed": 1.0,
-                "pitch": 1.0,
-                "description": vc.get("description", ""),
-                "base_instruct": default_styles.get(char_name, ""),
-                "audio_effects": [],
-                "created_at": store._now(),
-            })
 
 
 def _audio_duration(filepath: str) -> float:
@@ -297,6 +252,88 @@ from app.core.tts import get_client
 from datetime import datetime
 
 
+def _get_project_tts_defaults(project_id: str) -> dict:
+    """
+    读取项目的 tts_defaults，返回可透传给 submit_tts 的采样参数字典。
+    若项目无 tts_defaults（旧数据未迁移），返回空 dict，
+    此时 submit_tts → TTS 服务端将使用其内置保守默认值。
+    """
+    proj = get_project(project_id)
+    if not proj:
+        return {}
+    defaults = proj.get("tts_defaults", {})
+    # 仅提取 submit_tts 能识别的参数，过滤掉 None 和未知字段
+    keys = ("temperature", "do_sample", "top_k", "top_p", "repetition_penalty")
+    return {k: defaults[k] for k in keys if k in defaults and defaults[k] is not None}
+
+
+def _resolve_dialogue_tts_params(project_id: str, dlg: dict, proj: dict = None) -> dict:
+    """
+    统一解析对白的 TTS 调用参数。所有生成路径（单条、批量、重试）共用此函数，
+    确保角色查找、voice_id 校验、instruct 组合、style_enabled 开关、
+    项目级 tts_defaults 读取等逻辑完全一致，消除代码克隆。
+
+    返回 dict 可直接 ** 展开传入 submit_tts()：
+        {text, speaker, instruct, speed, pitch, temperature, do_sample, top_k, top_p, repetition_penalty}
+
+    角色查找仅使用项目真实角色列表，不再有虚拟角色（旁白/场景）fallback。
+    若角色不存在会自动创建（兜底）。
+    """
+    if proj is None:
+        proj = get_project(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+
+    # ── 角色查找（真实角色） ──────────────────────────────
+    char = None
+    char_id = dlg["character_id"]
+    # 查找真实角色
+    for c in proj.get("characters", []):
+        if c["id"] == char_id:
+            char = c
+            break
+    # 角色不存在时自动创建（兜底，防止预处理遗漏导致卡死）
+    if not char:
+        from app.core.store import add_character
+        char_name = dlg.get("character_name") or char_id
+        existing = next((c for c in proj["characters"] if c["name"] == char_name), None)
+        if existing:
+            char = existing
+        else:
+            char = add_character(
+                project_id, char_name, voice_id="aiden",
+                description=f"自动创建角色（原 ID: {char_id}），可在角色面板修改音色",
+            )
+            if char:
+                proj["characters"].append(char)
+    if not char:
+        raise HTTPException(400, f"角色不存在（character_id: {char_id}），请先在角色管理中创建角色或修改对白的角色设置")
+
+    # ── voice_id 安全校验 ──────────────────────────────
+    voice_id = _safe_voice_id(char.get("voice_id", "aiden"))
+
+    # ── instruct 组合（受 style_enabled 开关控制） ──────
+    base_instruct = char.get("base_instruct", "")
+    scene_instruct = dlg.get("instruct", "")
+    style_enabled = dlg.get("style_enabled", False)
+    if style_enabled:
+        full_instruct = f"{base_instruct}，{scene_instruct}" if base_instruct and scene_instruct else (base_instruct or scene_instruct)
+    else:
+        full_instruct = base_instruct  # 仅角色基础风格，忽略场景情绪
+
+    # ── 项目级 TTS 采样参数 ────────────────────────────
+    tts_params = _get_project_tts_defaults(project_id)
+
+    return {
+        "text": dlg["text"],
+        "speaker": voice_id,
+        "instruct": full_instruct,
+        "speed": char.get("speed", 1.0),
+        "pitch": char.get("pitch", 1.0),
+        **tts_params,
+    }
+
+
 async def _download_and_save(project_id: str, episode_id: str, dialogue_id: str,
                              task_id: str, placeholder_id: str):
     """Background task: check TTS status once, download if done, otherwise leave for manual refresh."""
@@ -396,54 +433,13 @@ async def api_generate_audio(project_id: str, episode_id: str, dialogue_id: str)
         raise HTTPException(404, "Dialogue not found")
 
     proj = get_project(project_id)
-    char = None
-    for c in proj["characters"]:
-        if c["id"] == dlg["character_id"]:
-            char = c
-            break
-    # 角色不存在时自动创建，防止预处理遗漏导致卡死
-    if not char:
-        from app.core.store import add_character
-        char_id = dlg["character_id"]
-        # 推断角色名称：虚拟角色去掉 __ 前缀，其他直接用 ID
-        if char_id.startswith("__") and char_id.endswith("__"):
-            char_name = char_id.strip("_")
-        else:
-            char_name = dlg.get("character_name") or char_id
-        # 防重名：同名角色直接复用
-        existing = next((c for c in proj["characters"] if c["name"] == char_name), None)
-        if existing:
-            char = existing
-        else:
-            char = add_character(
-                project_id, char_name, voice_id="aiden",
-                description=f"自动创建角色（原 ID: {char_id}），可在角色面板修改音色",
-            )
-            if char:
-                proj["characters"].append(char)
-    if not char:
-        raise HTTPException(400, f"角色不存在（character_id: {dlg['character_id']}），请先在角色管理中创建角色或修改对白的角色设置")
 
-    voice_id = _safe_voice_id(char.get("voice_id", "aiden"))
-
-    # 组合 instruct：根据 style_enabled 决定是否叠加场景情绪
-    base_instruct = char.get("base_instruct", "")
-    scene_instruct = dlg.get("instruct", "")
-    style_enabled = dlg.get("style_enabled", False)  # 默认关闭
-    if style_enabled:
-        full_instruct = f"{base_instruct}，{scene_instruct}" if base_instruct and scene_instruct else (base_instruct or scene_instruct)
-    else:
-        full_instruct = base_instruct  # 仅角色基础风格
+    # 统一解析 TTS 参数（角色查找 + voice_id + instruct + style_enabled + tts_defaults）
+    tts_kwargs = _resolve_dialogue_tts_params(project_id, dlg, proj)
 
     # Submit TTS, get task_id immediately
     try:
-        task_id = await submit_tts(
-            text=dlg["text"],
-            speaker=voice_id,
-            instruct=full_instruct,
-            speed=char.get("speed", 1.0),
-            pitch=char.get("pitch", 1.0),
-        )
+        task_id = await submit_tts(**tts_kwargs)
     except Exception as e:
         # Submit 失败（网络/TTS服务不可用）→ 写 interrupted 占位，等刷新时重新提交
         interrupt_id = f"gen_{uuid.uuid4().hex[:8]}"
@@ -647,32 +643,14 @@ async def _refresh_single_dialogue(project_id: str, episode_id: str, dlg: dict):
                 return
         else:
             try:
-                _char = None
+                # 统一解析 TTS 参数（与单条/批量路径共用同一函数）
+                # 注意：重试路径中 _data 已读取，直接用其中项目数据避免重复 IO
                 _data = store._read()
-                for _p in _data["projects"]:
-                    if _p["id"] == project_id:
-                        for _c in _p.get("characters", []):
-                            if _c["id"] == dlg.get("character_id"):
-                                _char = _c
-                                break
-                        break
-                if not _char:
+                _proj = next((p for p in _data["projects"] if p["id"] == project_id), None)
+                if not _proj:
                     continue
-                voice_id = _safe_voice_id(_char.get("voice_id", "aiden"))
-                base_instruct = _char.get("base_instruct", "")
-                scene_instruct = dlg.get("instruct", "")
-                style_enabled = dlg.get("style_enabled", False)
-                if style_enabled:
-                    full_instruct = f"{base_instruct}，{scene_instruct}" if base_instruct and scene_instruct else (base_instruct or scene_instruct)
-                else:
-                    full_instruct = base_instruct
-                new_task_id = await submit_tts(
-                    text=dlg["text"],
-                    speaker=voice_id,
-                    instruct=full_instruct,
-                    speed=_char.get("speed", 1.0),
-                    pitch=_char.get("pitch", 1.0),
-                )
+                tts_kwargs = _resolve_dialogue_tts_params(project_id, dlg, _proj)
+                new_task_id = await submit_tts(**tts_kwargs)
                 data = store._read()
                 for p in data["projects"]:
                     if p["id"] == project_id:
@@ -731,11 +709,6 @@ async def api_generate_batch_audio(project_id: str, episode_id: str, body: Batch
     if not proj:
         raise HTTPException(404, "Project not found")
 
-    # 构建角色查找表（真实角色 + 虚拟角色）
-    char_map = {c["id"]: c for c in proj.get("characters", [])}
-    for vc in _VIRTUAL_CHARS:
-        char_map[vc["id"]] = vc
-
     total = len(body.dialogue_ids)
 
     async def _stream():
@@ -756,30 +729,10 @@ async def api_generate_batch_audio(project_id: str, episode_id: str, body: Batch
                 failed_list.append(dlg_id)
                 continue
 
-            char = char_map.get(dlg["character_id"])
-            if not char:
-                msg = _json.dumps({"index": i, "total": total, "dialogue_id": dlg_id, "status": "error", "error": "角色不存在"}, ensure_ascii=False)
-                yield f"data: {msg}\n\n"
-                failed_list.append(dlg_id)
-                continue
-
-            voice_id = _safe_voice_id(char.get("voice_id", "aiden"))
-            base_instruct = char.get("base_instruct", "")
-            scene_instruct = dlg.get("instruct", "")
-            style_enabled = dlg.get("style_enabled", False)
-            if style_enabled:
-                full_instruct = f"{base_instruct}，{scene_instruct}" if base_instruct and scene_instruct else (base_instruct or scene_instruct)
-            else:
-                full_instruct = base_instruct
-
             try:
-                task_id = await submit_tts(
-                    text=dlg["text"],
-                    speaker=voice_id,
-                    instruct=full_instruct,
-                    speed=char.get("speed", 1.0),
-                    pitch=char.get("pitch", 1.0),
-                )
+                # 统一解析 TTS 参数（与单条路径共用同一函数，确保行为一致）
+                tts_kwargs = _resolve_dialogue_tts_params(project_id, dlg, proj)
+                task_id = await submit_tts(**tts_kwargs)
                 submitted += 1
 
                 # 写回 store：创建占位记录
@@ -1104,8 +1057,6 @@ async def api_regenerate_from(project_id: str, episode_id: str, body: EpisodeGen
     if not proj:
         raise HTTPException(404, "Project not found")
 
-    # 确保旁白、场景等虚拟角色在项目中存在
-    _ensure_virtual_chars_in_project(project_id, proj)
 
     # 找到指定集在列表中的索引
     ep_index = None
@@ -1224,8 +1175,6 @@ async def api_generate_episodes(project_id: str, body: EpisodeGenRequest):
     if not proj:
         raise HTTPException(404, "Project not found")
 
-    # 确保旁白、场景等虚拟角色在项目中存在
-    _ensure_virtual_chars_in_project(project_id, proj)
 
     llm_cfg = get_llm_config()
     if not llm_cfg.get("base_url") or not llm_cfg.get("api_key"):
@@ -1302,8 +1251,6 @@ async def api_generate_dialogues(project_id: str, episode_id: str, body: Dialogu
     if not proj:
         raise HTTPException(404, "Project not found")
 
-    # 确保旁白、场景等虚拟角色在项目中存在
-    _ensure_virtual_chars_in_project(project_id, proj)
 
     ep = get_episode(project_id, episode_id)
     if not ep:
@@ -1512,36 +1459,33 @@ async def api_generate_dialogues(project_id: str, episode_id: str, body: Dialogu
             continue
 
         char_id = ""
-        if char_name in ("旁白", "场景"):
-            char_id = f"__{char_name}__"
-        else:
-            # 1. 精确匹配已有角色（忽略首尾空格）
+        # 1. 精确匹配已有角色（忽略首尾空格）
+        for c in proj.get("characters", []):
+            if c["name"].strip() == char_name:
+                char_id = c["id"]
+                break
+        # 2. 精确匹配本次调用中已创建的角色
+        if not char_id and char_name in new_char_cache:
+            char_id = new_char_cache[char_name]
+        # 3. 归一化匹配：去掉空格、常见标点、下划线后比较
+        if not char_id:
+            import re as _re
+            norm = _re.sub(r'[\s，。、；：！？""''（）【】《》\-·—_]', '', char_name)
             for c in proj.get("characters", []):
-                if c["name"].strip() == char_name:
+                if _re.sub(r'[\s，。、；：！？""''（）【】《》\-·—_]', '', c["name"]) == norm:
                     char_id = c["id"]
                     break
-            # 2. 精确匹配本次调用中已创建的角色
-            if not char_id and char_name in new_char_cache:
-                char_id = new_char_cache[char_name]
-            # 3. 归一化匹配：去掉空格和常见标点后比较
-            if not char_id:
-                import re as _re
-                norm = _re.sub(r'[\s，。、；：！？""''（）【】《》\-·—]', '', char_name)
-                for c in proj.get("characters", []):
-                    if _re.sub(r'[\s，。、；：！？""''（）【】《》\-·—]', '', c["name"]) == norm:
-                        char_id = c["id"]
-                        break
-            # 4. 找不到 → 创建新角色
-            if not char_id:
-                from app.core.store import add_character, _uid
-                existing_voices = [_safe_voice_id(c.get("voice_id", "")) for c in proj.get("characters", [])]
-                voice_id = existing_voices[0] if existing_voices else "aiden"
-                new_char = add_character(project_id, char_name, voice_id, description=f"AI 自动生成角色: {char_name}")
-                if new_char:
-                    char_id = new_char["id"]
-                    new_chars.append(char_name)
-                    new_char_cache[char_name] = char_id
-                    proj["characters"].append(new_char)
+        # 4. 找不到 → 创建新角色（旁白/场景也走此逻辑，不特殊处理）
+        if not char_id:
+            from app.core.store import add_character
+            existing_voices = [_safe_voice_id(c.get("voice_id", "")) for c in proj.get("characters", [])]
+            voice_id = existing_voices[0] if existing_voices else "aiden"
+            new_char = add_character(project_id, char_name, voice_id, description=f"AI 自动生成角色: {char_name}")
+            if new_char:
+                char_id = new_char["id"]
+                new_chars.append(char_name)
+                new_char_cache[char_name] = char_id
+                proj["characters"].append(new_char)
 
         dlg = add_dialogue(project_id, episode_id, char_id, text, len(created), instruct)
         if dlg:

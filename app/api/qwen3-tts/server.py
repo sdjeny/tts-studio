@@ -102,13 +102,41 @@ def worker_loop():
             speaker = task.get("speaker", "")
             instruct = task.get("instruct", "")
 
-            log.info("[%s] 开始生成: %s", task_id[:8], text[:30])
+            # ── 采样控制参数（保守默认值，最小化声音波动） ──────────
+            _def_temp = 0.3
+            _def_top_k = 20
+            _def_top_p = 0.85
+            _def_rep_pen = 1.1
+
+            # task 中的值可能为 None（旧客户端未传），此时使用保守默认值
+            temperature = task["temperature"] if task.get("temperature") is not None else _def_temp
+            do_sample    = task["do_sample"]    if task.get("do_sample")    is not None else True
+            top_k        = task["top_k"]        if task.get("top_k")        is not None else _def_top_k
+            top_p        = task["top_p"]        if task.get("top_p")        is not None else _def_top_p
+            rep_penalty  = task["repetition_penalty"] if task.get("repetition_penalty") is not None else _def_rep_pen
+
+            generate_kwargs = {
+                "temperature": temperature,
+                "do_sample": do_sample,
+                "top_k": top_k,
+                "top_p": top_p,
+                "repetition_penalty": rep_penalty,
+            }
+
+            # 打印完整生成参数，便于排查参数透传问题
+            log.info(
+                "[%s] 开始生成 | text=%.30s | speaker=%s | instruct=%s | "
+                "temp=%.2f | sample=%s | top_k=%d | top_p=%.2f | rep_pen=%.2f",
+                task_id[:8], text, speaker, instruct,
+                temperature, do_sample, top_k, top_p, rep_penalty,
+            )
 
             wavs, sr = model.generate_custom_voice(
                 text=text,
                 language=language,
                 speaker=speaker,
                 instruct=instruct,
+                **generate_kwargs,
             )
 
             clip = wavs[0] if isinstance(wavs, list) else wavs
@@ -162,6 +190,12 @@ def submit_task():
         "language": data.get("language", "Chinese"),
         "speaker": data.get("speaker", ""),
         "instruct": data.get("instruct", ""),
+        # ── 采样控制参数（可选，未传则使用 worker 中的保守默认值） ──
+        "temperature": data.get("temperature"),          # float | None
+        "do_sample": data.get("do_sample"),              # bool | None
+        "top_k": data.get("top_k"),                      # int | None
+        "top_p": data.get("top_p"),                      # float | None
+        "repetition_penalty": data.get("repetition_penalty"),  # float | None
         "status": "pending",
         "submitted_at": datetime.now().isoformat(),
     }

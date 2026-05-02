@@ -121,8 +121,6 @@ export default function DialogueList({ project, episode, onChange, onError }: {
         <div style={{ background: "#0f1117", border: "1px solid #334155", borderRadius: 8, padding: 12 }}>
           <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
             <select value={charId} onChange={(e) => setCharId(e.target.value)} style={{ ...inputSm, minWidth: 120 }}>
-              <option value="__旁白__">📖 旁白</option>
-              <option value="__场景__">🎬 场景</option>
               {project.characters.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
             <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "#94a3b8" }}>
@@ -203,10 +201,8 @@ function DialogueRow({ dlg, index, onGenerate, onRefresh, onClearHistory, onDown
 
         <select value={editCharId} onChange={(e) => { setEditCharId(e.target.value); onUpdate({ character_id: e.target.value }); }}
           style={{ ...inputSm, padding: "2px 6px", fontSize: 12, width: "auto", minWidth: 80 }}>
-          <option value="__旁白__">📖 旁白</option>
-          <option value="__场景__">🎬 场景</option>
           {characters.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-          {editCharId && editCharId !== "__旁白__" && editCharId !== "__场景__" && !characters.find(c => c.id === editCharId) && (
+          {editCharId && !characters.find(c => c.id === editCharId) && (
             <option value={editCharId}>⚠ 异常({editCharId.slice(0, 8)})</option>
           )}
         </select>
@@ -247,12 +243,10 @@ function DialogueRow({ dlg, index, onGenerate, onRefresh, onClearHistory, onDown
           <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
             <select value={editCharId} onChange={(e) => setEditCharId(e.target.value)}
               style={{ ...inputSm, padding: "2px 6px", fontSize: 12, width: "auto", minWidth: 100 }}>
-              <option value="__旁白__">📖 旁白</option>
-              <option value="__场景__">🎬 场景</option>
               {characters.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
             <span style={{ fontSize: 12, color: "#64748b", alignSelf: "center" }}>
-              {editCharId === "__旁白__" ? "📖 旁白" : editCharId === "__场景__" ? "🎬 场景" : characters.find(c => c.id === editCharId)?.name || "未知角色"}
+              {characters.find(c => c.id === editCharId)?.name || "未知角色"}
             </span>
           </div>
           <textarea value={editText} onChange={(e) => setEditText(e.target.value)}

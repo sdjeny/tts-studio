@@ -81,6 +81,15 @@ export interface Episode {
   created_at: string;
 }
 
+/** 项目级 TTS 采样参数默认值 */
+export interface TtsDefaults {
+  temperature: number;       // 采样温度，越低声音越稳定，建议 0.1~1.0
+  do_sample: boolean;        // true=采样 / false=贪心解码
+  top_k: number;             // top-k 采样，越小越集中，建议 10~100
+  top_p: number;             // 核采样阈值，越小越集中，建议 0.5~1.0
+  repetition_penalty: number;// 重复惩罚，>1.0 抑制重复，建议 1.0~1.5
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -88,6 +97,7 @@ export interface Project {
   episodes: Episode[];
   created_at: string;
   updated_at?: string;
+  tts_defaults?: TtsDefaults;  // 项目级 TTS 参数（旧项目可能不存在）
 }
 
 // ── API ─────────────────────────────────────────────────
@@ -101,8 +111,14 @@ export const api = {
   getProject: (id: string) => request<Project>(`/projects/${id}`),
   createProject: (name: string) =>
     request<Project>("/projects", { method: "POST", body: JSON.stringify({ name }) }),
-  updateProject: (id: string, name: string) =>
-    request<Project>(`/projects/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
+  updateProject: (id: string, name?: string, tts_defaults?: Partial<TtsDefaults>) =>
+    request<Project>(`/projects/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        ...(name !== undefined && { name }),
+        ...(tts_defaults !== undefined && { tts_defaults }),
+      }),
+    }),
   deleteProject: (id: string) =>
     request<void>(`/projects/${id}`, { method: "DELETE" }),
 

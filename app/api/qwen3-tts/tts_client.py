@@ -157,13 +157,39 @@ class TtsClient:
 
     # ── 提交任务 ──────────────────────────────────────
     def submit(self, text: str, language: str = "Chinese",
-               speaker: str = "", instruct: str = "") -> SubmitResult:
-        r, code = self._request("POST", "/tts/submit", {
+               speaker: str = "", instruct: str = "",
+               temperature: float = None, do_sample: bool = None,
+               top_k: int = None, top_p: float = None,
+               repetition_penalty: float = None) -> SubmitResult:
+        """
+        提交 TTS 任务。
+
+        采样控制参数（可选，None 则服务端使用保守默认值）：
+          temperature:        采样温度，越低声音越稳定，建议 0.1~1.0
+          do_sample:          是否采样，True=采样 / False=贪心解码
+          top_k:              保留 top-k token 采样，越小越集中，建议 10~100
+          top_p:              核采样阈值，越小越集中，建议 0.5~1.0
+          repetition_penalty: 重复惩罚，>1.0 抑制重复，建议 1.0~1.5
+        """
+        payload = {
             "text": text,
             "language": language,
             "speaker": speaker,
             "instruct": instruct,
-        })
+        }
+        # 仅当客户端显式传入时才携带采样参数，避免旧调用意外覆盖服务端默认值
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if do_sample is not None:
+            payload["do_sample"] = do_sample
+        if top_k is not None:
+            payload["top_k"] = top_k
+        if top_p is not None:
+            payload["top_p"] = top_p
+        if repetition_penalty is not None:
+            payload["repetition_penalty"] = repetition_penalty
+
+        r, code = self._request("POST", "/tts/submit", payload)
         if code == 202:
             return SubmitResult(task_id=r["task_id"], position=r.get("position", 0), raw=r)
         return SubmitResult(error=r.get("error", f"HTTP {code}"), raw=r)

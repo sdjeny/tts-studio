@@ -48,11 +48,26 @@ app/memory_proxy/config.yaml
 app/api/qwen3-tts/test_output/
 app/api/qwen3-tts/server.log
 test_*.py
+test_headless.py
+test_*.png
 
 # 测试输出
 test_*.txt
 *_log.txt
 *_output.txt
+
+# 运行时日志
+server.log
+frontend/server.log
+
+# 前端构建产物（由 CI 构建）
+frontend/dist/
+frontend/node_modules/
+frontend/tsconfig.tsbuildinfo
+
+# 前端开发文件
+frontend/*.png
+frontend/debug_*.png
 
 # 日志目录
 logs/

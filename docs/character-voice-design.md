@@ -81,26 +81,17 @@ else:
     full_instruct = base_instruct
 ```
 
-## 虚拟角色自动创建
+## 角色体系
 
-旁白（`__旁白__`）和场景（`__场景__`）为虚拟角色，在生成大纲/对白前自动创建为真实角色：
-
-| 角色 | 默认音色 | 默认 base_instruct |
-|------|----------|-------------------|
-| 旁白 | dylan | `"沉稳叙述、略带磁性"` |
-| 场景 | sohee | `"平静舒缓、描述性"` |
-
-用户可在角色面板中修改虚拟角色的音色和风格。
+所有对白必须绑定真实角色，不再有虚拟角色（旁白/场景）概念。
+旁白和普通角色一样，通过角色面板预设音色和风格。
 
 ## chars_info 构建
 
-所有生成阶段统一使用 `_build_chars_info(proj, detailed)` 构建角色信息，自动包含虚拟角色：
+所有生成阶段统一使用 `_build_chars_info(proj, detailed)` 构建角色信息，仅包含真实角色：
 
 ```python
-_VIRTUAL_CHARS = [
-    {"id": "__旁白__", "name": "旁白", "voice_id": "dylan", "base_instruct": "沉稳叙述、略带磁性", "description": "旁白叙述者"},
-    {"id": "__场景__", "name": "场景", "voice_id": "sohee", "base_instruct": "平静舒缓、描述性", "description": "场景描写"},
-]
+chars = list(proj.get("characters", []))
 ```
 
 ## 批量生成音频（SSE 流式进度）
@@ -172,8 +163,10 @@ instruct 规则：
 - [x] `app/core/store.py` — list_projects 按 updated_at 倒序 + 数据迁移
 - [x] `app/core/store.py` — touch_project 更新时间戳
 - [x] `app/api/projects.py` — 所有修改端点加 touch_project + import
-- [x] `app/api/episodes.py` — _VIRTUAL_CHARS + _ensure_virtual_chars_in_project 自动创建虚拟角色
-- [x] `app/api/episodes.py` — _build_chars_info 统一构建角色信息（含虚拟角色）
+- [x] `app/api/episodes.py` — 移除虚拟角色系统（_VIRTUAL_CHARS / _ensure_virtual_chars_in_project），所有对白绑定真实角色
+- [x] `app/api/episodes.py` — _build_chars_info 仅使用真实角色列表
+- [x] `app/api/episodes.py` — 数据迁移：所有项目对白中 __旁白__/__场景__ 按名字匹配到真实角色 ID
+- [x] `frontend/src/components/DialogueList.tsx` — 角色选择下拉框移除 __旁白__/__场景__ 虚拟选项
 - [x] `app/api/episodes.py` — 所有 chars_info 构建处改用 _build_chars_info
 - [x] `app/api/episodes.py` — TTS 提交根据 style_enabled 决定 instruct（单条、批量、刷新重试 3 处）
 - [x] `app/api/episodes.py` — generate-batch 改为 SSE 流式响应

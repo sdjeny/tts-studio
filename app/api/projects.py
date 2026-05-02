@@ -26,8 +26,18 @@ class ProjectCreate(BaseModel):
     name: str
 
 
+class TtsDefaults(BaseModel):
+    """项目级 TTS 采样参数默认值。所有字段可选，None 表示不更新该字段。"""
+    temperature: float | None = None
+    do_sample: bool | None = None
+    top_k: int | None = None
+    top_p: float | None = None
+    repetition_penalty: float | None = None
+
+
 class ProjectUpdate(BaseModel):
-    name: str
+    name: str | None = None
+    tts_defaults: TtsDefaults | None = None
 
 
 class CharacterCreate(BaseModel):
@@ -72,7 +82,14 @@ async def api_create_project(body: ProjectCreate):
 
 @router.patch("/projects/{project_id}")
 async def api_update_project(project_id: str, body: ProjectUpdate):
-    p = update_project(project_id, body.name)
+    # 收集需要更新的字段
+    extra = {}
+    if body.tts_defaults is not None:
+        # 只传入非 None 的字段，None 表示"不修改"
+        tts_fields = {k: v for k, v in body.tts_defaults.model_dump().items() if v is not None}
+        if tts_fields:
+            extra["tts_defaults"] = tts_fields
+    p = update_project(project_id, name=body.name, **extra)
     if not p:
         raise HTTPException(404, "Project not found")
     touch_project(project_id)

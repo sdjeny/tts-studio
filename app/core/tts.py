@@ -22,11 +22,21 @@ def get_client():
 
 async def submit_tts(text: str, speaker: str = "", speed: float = 1.0,
                      pitch: float = 1.0, instruct: str = "",
-                     language: str = "Chinese") -> str:
+                     language: str = "Chinese",
+                     temperature: float = None, do_sample: bool = None,
+                     top_k: int = None, top_p: float = None,
+                     repetition_penalty: float = None) -> str:
     """
     提交 TTS 任务，立即返回 task_id。
     失败则 raise Exception。
     instruct 格式：角色基础风格 + 场景情绪，如 '沉稳略带磁性，此处略带紧张'
+
+    采样控制参数（可选，None 则服务端使用保守默认值）：
+      temperature:        采样温度，越低声音越稳定，建议 0.1~1.0
+      do_sample:          是否采样，True=采样 / False=贪心解码
+      top_k:              保留 top-k token 采样，越小越集中，建议 10~100
+          top_p:              核采样阈值，越小越集中，建议 0.5~1.0
+          repetition_penalty: 重复惩罚，>1.0 抑制重复，建议 1.0~1.5
     """
     client = get_client()
 
@@ -44,6 +54,11 @@ async def submit_tts(text: str, speaker: str = "", speed: float = 1.0,
             language=language,
             speaker=speaker,
             instruct=full_instruct.strip("，"),
+            temperature=temperature,
+            do_sample=do_sample,
+            top_k=top_k,
+            top_p=top_p,
+            repetition_penalty=repetition_penalty,
         )
 
     submit_result = await loop.run_in_executor(None, _submit)
@@ -98,8 +113,12 @@ async def download_tts(task_id: str) -> bytes:
 
 async def generate_audio(text: str, speaker: str = "", speed: float = 1.0,
                          pitch: float = 1.0, instruct: str = "",
-                         language: str = "Chinese") -> tuple[str, bytes]:
+                         language: str = "Chinese",
+                         temperature: float = None, do_sample: bool = None,
+                         top_k: int = None, top_p: float = None,
+                         repetition_penalty: float = None) -> tuple[str, bytes]:
     """兼容旧接口：提交+等待+下载"""
-    task_id = await submit_tts(text, speaker, speed, pitch, instruct, language)
+    task_id = await submit_tts(text, speaker, speed, pitch, instruct, language,
+                               temperature, do_sample, top_k, top_p, repetition_penalty)
     audio_data = await download_tts(task_id)
     return task_id, audio_data
