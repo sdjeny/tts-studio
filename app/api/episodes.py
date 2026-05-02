@@ -194,20 +194,12 @@ async def api_insert_dialogue(project_id: str, episode_id: str, body: DialogueIn
     ep = get_episode(project_id, episode_id)
     if not ep:
         raise HTTPException(404, "Episode not found")
-    # 记录插入前的 order 集合，用于计算 affected
-    before_orders = {d["id"]: d["order"] for d in ep.get("dialogues", [])}
-    new_dlg = store.insert_dialogue_after(project_id, episode_id, body.after_dialogue_id, body.character_id, body.text, body.instruct)
+    new_dlg, affected = store.insert_dialogue_after(
+        project_id, episode_id, body.after_dialogue_id,
+        body.character_id, body.text, body.instruct
+    )
     if new_dlg is None:
         raise HTTPException(404, "Target dialogue not found")
-    # affected = order 被重排的原有对白数
-    ep_after = store.get_episode(project_id, episode_id)
-    affected = 0
-    if ep_after:
-        for d in ep_after.get("dialogues", []):
-            if d["id"] == new_dlg["id"]:
-                continue
-            if d["id"] in before_orders and d["order"] != before_orders[d["id"]]:
-                affected += 1
     return {"ok": True, "dialogue": new_dlg, "affected": affected}
 
 

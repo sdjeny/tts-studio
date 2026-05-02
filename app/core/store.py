@@ -352,36 +352,37 @@ def delete_dialogue(project_id: str, episode_id: str, dialogue_id: str) -> bool:
 
 
 def insert_dialogue_after(project_id: str, episode_id: str, after_dialogue_id: str,
-                         character_id: str = "", text: str = "", instruct: str = "") -> dict | None:
-    """在指定对白之后插入一条新对白。返回新对白 dict，或 None（找不到目标）。"""
+                         character_id: str = "", text: str = "", instruct: str = "") -> tuple[dict | None, int]:
+    """在指定对白之后插入一条新对白。返回 (新对白 dict, affected 数量)，或 (None, 0)（找不到目标）。"""
     data = _read()
     for p in data["projects"]:
         if p["id"] == project_id:
             for ep in p["episodes"]:
                 if ep["id"] == episode_id:
                     dialogues = ep["dialogues"]
-                    # 找到 after_dialogue_id 对应的索引
                     idx = None
                     for i, d in enumerate(dialogues):
                         if d["id"] == after_dialogue_id:
                             idx = i
                             break
                     if idx is None:
-                        return None
+                        return None, 0
                     target = dialogues[idx]
                     new_order = target["order"] + 1
-                    # 将 idx 之后的所有对白 order +1
                     for j in range(idx + 1, len(dialogues)):
                         dialogues[j]["order"] += 1
-                    # 如果未指定 character_id，继承目标对白的 character_id
+                    affected = len(dialogues) - idx - 1
                     if not character_id:
                         character_id = target["character_id"]
-                    # 解析 character_name
+                    # 解析 character_name，角色不存在时 fallback 到第一个角色
                     char_name = ""
                     for c in p["characters"]:
                         if c["id"] == character_id:
                             char_name = c["name"]
                             break
+                    if not char_name and p["characters"]:
+                        char_name = p["characters"][0]["name"]
+                        character_id = p["characters"][0]["id"]
                     if not char_name:
                         char_id_display = character_id[:8] if character_id else "(空)"
                         char_name = f"⚠ 角色异常({char_id_display})"
@@ -401,8 +402,8 @@ def insert_dialogue_after(project_id: str, episode_id: str, after_dialogue_id: s
                     }
                     dialogues.insert(idx + 1, new_dlg)
                     _write(data)
-                    return new_dlg
-    return None
+                    return new_dlg, affected
+    return None, 0
 
 
 def delete_dialogue_and_audio_files(project_id: str, episode_id: str, dialogue_id: str) -> tuple[bool, int]:
