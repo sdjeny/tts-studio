@@ -4,10 +4,10 @@ services:
       context: .
     container_name: tts-studio
     ports:
-      - "8000:8000"
+      - "7860:8000"
     volumes:
-      - ./data:/app/data
       - ./app:/app/app
+      - ./data:/app/data
     environment:
       - DATA_DIR=/app/data
       - TTS_API_BASE=${TTS_API_BASE:-http://host.docker.internal:8001}

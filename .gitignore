@@ -64,6 +64,7 @@ frontend/server.log
 frontend/dist/
 frontend/node_modules/
 frontend/tsconfig.tsbuildinfo
+frontend/package-lock.json
 
 # 前端开发文件
 frontend/*.png

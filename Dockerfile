@@ -1,6 +1,6 @@
 FROM python:3.11-slim-bookworm
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
+ENV PYTHONDONTWRITECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -27,8 +27,8 @@ RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ -r req
 COPY frontend/ ./frontend/
 RUN cd frontend && npm install && npm run build
 
-# Copy backend
-COPY app/ ./app/
+# 注意：app/ 目录通过 volume 映射，不再 COPY
+# Dockerfile 中不复制 app/，运行时由 docker-compose volumes 挂载
 
 RUN mkdir -p /app/data/audio
 

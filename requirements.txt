@@ -7,6 +7,3 @@ python-multipart==0.0.20
 # Audio processing
 pedalboard==0.9.*
 soundfile==0.13.*
-
-# Frontend build (Node.js handles this, but keep for reference)
-# vite, react, typescript — managed by frontend/package.json
