@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { api, Project, Episode, Dialogue, Character } from "../api";
 
 /** 根据角色名生成稳定颜色 */
@@ -18,6 +18,8 @@ export default function DialogueList({ project, episode, onChange, onError }: {
   const [instruct, setInstruct] = useState("");
   const [bulk, setBulk] = useState(false);
   const [bulkText, setBulkText] = useState("");
+  const [toast, setToast] = useState<string | null>(null);
+  const [autoEditIds, setAutoEditIds] = useState<Set<string>>(new Set());
 
   const add = async () => {
     if (!text.trim() || !charId) return;
@@ -77,8 +79,9 @@ export default function DialogueList({ project, episode, onChange, onError }: {
   const sorted = [...(episode.dialogues || [])].sort((a, b) => a.order - b.order);
 
   const handleInsert = async (afterDlg: Dialogue) => {
+    const placeholderId = `__placeholder__${crypto.randomUUID()}`;
     const placeholder: Dialogue = {
-      id: "__placeholder__",
+      id: placeholderId,
       character_id: afterDlg.character_id,
       character_name: afterDlg.character_name,
       text: "",
@@ -106,12 +109,25 @@ export default function DialogueList({ project, episode, onChange, onError }: {
         character_id: afterDlg.character_id,
       });
       const realDialogues = [...(episode.dialogues || [])];
-      const pIdx = realDialogues.findIndex(d => d.id === "__placeholder__");
+      const pIdx = realDialogues.findIndex(d => d.id === placeholderId);
       if (pIdx !== -1) realDialogues[pIdx] = resp.dialogue;
       episode.dialogues = realDialogues;
       onChange();
+      setToast('✅ 插入成功，如需更新时间线请重新装配');
+      setTimeout(() => setToast(null), 3000);
+      setAutoEditIds(prev => new Set([...prev, resp.dialogue.id]));
     } catch (e: any) {
       onError(e.message);
+      // 精确回滚：移除 placeholder，恢复后续 order
+      const sorted = [...(episode.dialogues || [])].sort((a, b) => a.order - b.order);
+      const pIdx = sorted.findIndex(d => d.id === placeholderId);
+      if (pIdx !== -1) {
+        sorted.splice(pIdx, 1);
+        for (let i = pIdx; i < sorted.length; i++) {
+          sorted[i] = { ...sorted[i], order: sorted[i].order - 1 };
+        }
+      }
+      episode.dialogues = sorted;
       onChange();
     }
   };
@@ -119,6 +135,11 @@ export default function DialogueList({ project, episode, onChange, onError }: {
   return (
     <div>
       {/* 对白列表 */}
+      {toast && (
+        <div style={{ background: '#22c55e18', color: '#22c55e', padding: '8px 12px', borderRadius: 4, marginBottom: 8, fontSize: 13 }}>
+          {toast}
+        </div>
+      )}
       {sorted.length === 0 && !adding ? (
         <p style={{ color: "#64748b", textAlign: "center", padding: 20 }}>暂无旁白/对白</p>
       ) : (
@@ -151,6 +172,8 @@ export default function DialogueList({ project, episode, onChange, onError }: {
                 onChange();
               }}
               onInsert={() => handleInsert(dlg)}
+              autoEditIds={autoEditIds}
+              onAutoEditConsumed={(id) => setAutoEditIds(prev => { const next = new Set(prev); next.delete(id); return next; })}
               characters={project.characters}
             />
           ))}
@@ -203,7 +226,7 @@ export default function DialogueList({ project, episode, onChange, onError }: {
 
 /* ── 单条行 ─────────────────────────────────────── */
 
-function DialogueRow({ dlg, index, onGenerate, onRefresh, onClearHistory, onDownload, onDelete, onUpdate, onActivate, onRemoveAudio, characters, onInsert }: {
+function DialogueRow({ dlg, index, onGenerate, onRefresh, onClearHistory, onDownload, onDelete, onUpdate, onActivate, onRemoveAudio, characters, onInsert, autoEditIds, onAutoEditConsumed }: {
   dlg: Dialogue; index: number;
   onGenerate: () => void; onRefresh: () => void; onClearHistory: () => void;
   onDownload: (audioId: string) => void;
@@ -213,12 +236,22 @@ function DialogueRow({ dlg, index, onGenerate, onRefresh, onClearHistory, onDown
   onRemoveAudio: (audioId: string) => void;
   characters: Character[];
   onInsert: () => void;
+  autoEditIds: Set<string>;
+  onAutoEditConsumed: (id: string) => void;
 }) {
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(autoEditIds.has(dlg.id));
   const [editText, setEditText] = useState(dlg.text);
   const [editCharId, setEditCharId] = useState(dlg.character_id);
   const [editInstruct, setEditInstruct] = useState(dlg.instruct || "");
   const [showHistory, setShowHistory] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // 当被标记为自动编辑时，聚焦 textarea
+  useEffect(() => {
+    if (autoEditIds.has(dlg.id) && textareaRef.current) {
+      textareaRef.current.focus();
+    }
+  }, [autoEditIds, dlg.id]);
 
   const currentAudio = dlg.audio_history?.find(a => a.id === dlg.current_audio_id);
 
@@ -292,14 +325,16 @@ function DialogueRow({ dlg, index, onGenerate, onRefresh, onClearHistory, onDown
             </span>
           </div>
           <textarea value={editText} onChange={(e) => setEditText(e.target.value)}
+            ref={textareaRef}
             style={{ ...inputSm, width: "100%", resize: "vertical", minHeight: 60 }} />
           <input value={editInstruct} onChange={(e) => setEditInstruct(e.target.value)}
             placeholder="instruct（如：低沉缓慢、紧张、欢快）"
             style={{ ...inputSm, width: "100%", marginTop: 4 }} />
           <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
-            <button onClick={() => { onUpdate({ character_id: editCharId, text: editText, instruct: editInstruct }); setEditing(false); }}
+            <button onClick={() => { onUpdate({ character_id: editCharId, text: editText, instruct: editInstruct }); setEditing(false); onAutoEditConsumed(dlg.id); }}
               style={{ ...btnBlue, padding: "3px 10px", fontSize: 12 }}>保存</button>
-            <button onClick={() => setEditing(false)} style={{ ...btnGhost, padding: "3px 10px", fontSize: 12 }}>取消</button>
+            <button onClick={() => { setEditing(false); onAutoEditConsumed(dlg.id); }}
+              style={{ ...btnGhost, padding: "3px 10px", fontSize: 12 }}>取消</button>
           </div>
         </div>
       ) : (
