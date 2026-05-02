@@ -176,6 +176,11 @@ export const api = {
     request<void>(`/projects/${pid}/episodes/${eid}/dialogues/${dlgId}`, {
       method: "DELETE",
     }),
+  insertDialogue: (pid: string, eid: string, data: { after_dialogue_id: string; character_id?: string; text?: string; instruct?: string }) =>
+    request<{ ok: boolean; dialogue: Dialogue; affected: number }>(
+      `/projects/${pid}/episodes/${eid}/dialogues/insert`,
+      { method: "POST", body: JSON.stringify(data) }
+    ),
   purgeDialogue: (pid: string, eid: string, dlgId: string) =>
     request<{ ok: boolean; deleted_files: number }>(
       `/projects/${pid}/episodes/${eid}/dialogues/${dlgId}/purge`,

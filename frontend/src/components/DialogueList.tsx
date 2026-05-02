@@ -76,6 +76,46 @@ export default function DialogueList({ project, episode, onChange, onError }: {
 
   const sorted = [...(episode.dialogues || [])].sort((a, b) => a.order - b.order);
 
+  const handleInsert = async (afterDlg: Dialogue) => {
+    const placeholder: Dialogue = {
+      id: "__placeholder__",
+      character_id: afterDlg.character_id,
+      character_name: afterDlg.character_name,
+      text: "",
+      summary: "",
+      instruct: "",
+      style_enabled: false,
+      order: afterDlg.order + 1,
+      status: "pending",
+      audio_history: [],
+      current_audio_id: null,
+      created_at: "",
+    };
+    const newDialogues = [...(episode.dialogues || [])].sort((a, b) => a.order - b.order);
+    const idx = newDialogues.findIndex(d => d.id === afterDlg.id);
+    if (idx === -1) return;
+    for (let i = idx + 1; i < newDialogues.length; i++) {
+      newDialogues[i] = { ...newDialogues[i], order: newDialogues[i].order + 1 };
+    }
+    newDialogues.splice(idx + 1, 0, placeholder);
+    episode.dialogues = newDialogues;
+    onChange();
+    try {
+      const resp = await api.insertDialogue(project.id, episode.id, {
+        after_dialogue_id: afterDlg.id,
+        character_id: afterDlg.character_id,
+      });
+      const realDialogues = [...(episode.dialogues || [])];
+      const pIdx = realDialogues.findIndex(d => d.id === "__placeholder__");
+      if (pIdx !== -1) realDialogues[pIdx] = resp.dialogue;
+      episode.dialogues = realDialogues;
+      onChange();
+    } catch (e: any) {
+      onError(e.message);
+      onChange();
+    }
+  };
+
   return (
     <div>
       {/* 对白列表 */}
@@ -110,6 +150,7 @@ export default function DialogueList({ project, episode, onChange, onError }: {
                 await api.updateDialogue(project.id, episode.id, dlg.id, data);
                 onChange();
               }}
+              onInsert={() => handleInsert(dlg)}
               characters={project.characters}
             />
           ))}
@@ -162,7 +203,7 @@ export default function DialogueList({ project, episode, onChange, onError }: {
 
 /* ── 单条行 ─────────────────────────────────────── */
 
-function DialogueRow({ dlg, index, onGenerate, onRefresh, onClearHistory, onDownload, onDelete, onUpdate, onActivate, onRemoveAudio, characters }: {
+function DialogueRow({ dlg, index, onGenerate, onRefresh, onClearHistory, onDownload, onDelete, onUpdate, onActivate, onRemoveAudio, characters, onInsert }: {
   dlg: Dialogue; index: number;
   onGenerate: () => void; onRefresh: () => void; onClearHistory: () => void;
   onDownload: (audioId: string) => void;
@@ -171,6 +212,7 @@ function DialogueRow({ dlg, index, onGenerate, onRefresh, onClearHistory, onDown
   onActivate: (audioId: string) => void;
   onRemoveAudio: (audioId: string) => void;
   characters: Character[];
+  onInsert: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState(dlg.text);
@@ -329,6 +371,7 @@ function DialogueRow({ dlg, index, onGenerate, onRefresh, onClearHistory, onDown
         <div style={{ flex: 1 }} />
 
         <button onClick={() => setEditing(true)} style={{ ...btnGhost, padding: "3px 8px", fontSize: 12 }}>✏️</button>
+        <button onClick={onInsert} style={{ ...btnGhost, padding: "3px 8px", fontSize: 12, color: "#22c55e", borderColor: "#22c55e" }} title="在此条后插入新对白">+</button>
         <button onClick={onClearHistory} style={{ ...btnGhost, padding: "3px 8px", fontSize: 12, color: "#f59e0b", borderColor: "#f59e0b" }}>清空历史</button>
         <button onClick={onDelete} style={{ ...btnGhost, padding: "3px 8px", fontSize: 12, color: "#ef4444", borderColor: "#ef4444" }} title="清空对白及音频文件">🗑</button>
       </div>
