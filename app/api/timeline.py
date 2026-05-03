@@ -352,17 +352,45 @@ async def export_timeline(project_id: str, episode_id: str, body: dict = None):
     fmt = body.get("format", "wav")
     sr = body.get("sample_rate", 24000)
     norm_db = body.get("normalization_db", -20.0)
+    clip_id = body.get("clip_id")
 
     if not tl["clips"]:
         raise HTTPException(400, "Timeline has no clips")
 
+    if clip_id is not None:
+        # Find the clip to determine the export range
+        target = None
+        for c in tl["clips"]:
+            if c["id"] == clip_id:
+                target = c
+                break
+        if target is None:
+            raise HTTPException(404, "Clip not found")
+        clip_start = target["start_time"]
+        clip_end = target["start_time"] + target["duration"]
+
+        # Filter clips overlapping with [clip_start, clip_end]
+        filtered = []
+        for c in tl["clips"]:
+            c_end = c["start_time"] + c["duration"]
+            if c["start_time"] < clip_end and c_end > clip_start:
+                shifted = copy.deepcopy(c)
+                shifted["start_time"] = c["start_time"] - clip_start
+                filtered.append(shifted)
+        clips_to_mix = filtered
+    else:
+        clips_to_mix = tl["clips"]
+
     mixed, sample_rate = mix_timeline(
-        tl["tracks"], tl["clips"],
+        tl["tracks"], clips_to_mix,
         sample_rate=sr, normalization_target_db=norm_db,
     )
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    out_fn = f"export_{episode_id[:8]}_{timestamp}.{fmt}"
+    if clip_id is not None:
+        out_fn = f"export_clip_{clip_id[:8]}_{timestamp}.{fmt}"
+    else:
+        out_fn = f"export_{episode_id[:8]}_{timestamp}.{fmt}"
     out_path = save_audio(mixed, out_fn, sample_rate)
     return FileResponse(str(out_path), filename=out_fn, media_type="audio/wav")
 
