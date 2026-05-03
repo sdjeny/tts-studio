@@ -20,8 +20,7 @@ export default function DialogueList({ project, episode, onChange, onError }: {
   const [bulkText, setBulkText] = useState("");
   const [toast, setToast] = useState<string | null>(null);
   const [autoEditIds, setAutoEditIds] = useState<Set<string>>(new Set());
-
-  const [, forceRender] = useState(0);
+  const [localDialogues, setLocalDialogues] = useState<Dialogue[] | null>(null);
 
   const add = async () => {
     if (!text.trim() || !charId) return;
@@ -78,10 +77,11 @@ export default function DialogueList({ project, episode, onChange, onError }: {
     } catch (e: any) { onError(e.message); }
   };
 
-  const sorted = [...(episode.dialogues || [])].sort((a, b) => a.order - b.order);
+  const displayDialogues = localDialogues || episode.dialogues;
+  const sorted = [...(displayDialogues || [])].sort((a, b) => a.order - b.order);
 
   const handleInsert = async (afterDlg: Dialogue) => {
-    const placeholderId = `__placeholder__${crypto.randomUUID()}`;
+    const placeholderId = `__placeholder__${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
     const placeholder: Dialogue = {
       id: placeholderId,
       character_id: afterDlg.character_id,
@@ -96,40 +96,35 @@ export default function DialogueList({ project, episode, onChange, onError }: {
       current_audio_id: null,
       created_at: "",
     };
-    const newDialogues = [...(episode.dialogues || [])].sort((a, b) => a.order - b.order);
+    const baseDialogues = localDialogues || episode.dialogues || [];
+    const newDialogues = [...baseDialogues].sort((a, b) => a.order - b.order);
     const idx = newDialogues.findIndex(d => d.id === afterDlg.id);
     if (idx === -1) return;
     for (let i = idx + 1; i < newDialogues.length; i++) {
       newDialogues[i] = { ...newDialogues[i], order: newDialogues[i].order + 1 };
     }
     newDialogues.splice(idx + 1, 0, placeholder);
-    episode.dialogues = newDialogues;
-    // 用 forceRender 触发本地渲染，不调用 onChange() 避免 load 覆盖 placeholder
-    forceRender(t => t + 1);
+    // 用 localDialogues state 触发重渲染，不调用 onChange() 避免 load 覆盖 placeholder
+    setLocalDialogues(newDialogues);
     try {
       const resp = await api.insertDialogue(project.id, episode.id, {
         after_dialogue_id: afterDlg.id,
         character_id: afterDlg.character_id,
       });
-      const realDialogues = [...(episode.dialogues || [])];
+      const realDialogues = [...(localDialogues || episode.dialogues || [])].sort((a, b) => a.order - b.order);
       const pIdx = realDialogues.findIndex(d => d.id === placeholderId);
       if (pIdx !== -1) realDialogues[pIdx] = resp.dialogue;
       episode.dialogues = realDialogues;
+      setLocalDialogues(null); // 同步完成后释放本地覆盖
       onChange();
       setToast('✅ 插入成功，如需更新时间线请重新装配');
       setTimeout(() => setToast(null), 3000);
       setAutoEditIds(prev => new Set([...prev, resp.dialogue.id]));
     } catch (e: any) {
       onError(e.message);
-      // 精确回滚：移除 placeholder，恢复后续 order
+      // 精确回滚
+      setLocalDialogues(null);
       const sorted = [...(episode.dialogues || [])].sort((a, b) => a.order - b.order);
-      const pIdx = sorted.findIndex(d => d.id === placeholderId);
-      if (pIdx !== -1) {
-        sorted.splice(pIdx, 1);
-        for (let i = pIdx; i < sorted.length; i++) {
-          sorted[i] = { ...sorted[i], order: sorted[i].order - 1 };
-        }
-      }
       episode.dialogues = sorted;
       onChange();
     }
