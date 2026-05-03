@@ -68,7 +68,7 @@ def list_projects() -> list[dict]:
         if not p.get("tts_defaults"):
             p["tts_defaults"] = {
                 "temperature": 0.3,
-                "do_sample": True,
+                "do_sample": False,
                 "top_k": 20,
                 "top_p": 0.85,
                 "repetition_penalty": 1.1,
@@ -103,7 +103,7 @@ def create_project(name: str) -> dict:
         # 保守默认值旨在最小化不同句子间的声音波动。
         "tts_defaults": {
             "temperature": 0.3,          # 采样温度，越低越稳定（官方默认 0.9）
-            "do_sample": True,           # True=采样 / False=贪心解码
+            "do_sample": False,          # True=采样 / False=贪心解码
             "top_k": 20,                 # top-k 采样，越小越集中（官方默认 50）
             "top_p": 0.85,               # 核采样阈值，越小越集中（官方默认 1.0）
             "repetition_penalty": 1.1,   # 重复惩罚（官方默认 1.05）
