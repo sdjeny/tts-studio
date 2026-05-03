@@ -331,7 +331,9 @@ export const api = {
 
   addTimelineClip: (pid: string, eid: string, data: Record<string, any>) =>
     request<{ clip: any }>(`/projects/${pid}/episodes/${eid}/timeline/clips`, {
-      method: "POST", body: JSON.stringify(data),
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
     }),
 
   updateTimelineClip: (pid: string, eid: string, clipId: string, data: Record<string, any>) =>
@@ -356,7 +358,9 @@ export const api = {
 
   addTimelineTrack: (pid: string, eid: string, name: string, type: string = "dialogue") =>
     request<{ track: any }>(`/projects/${pid}/episodes/${eid}/timeline/tracks`, {
-      method: "POST", body: JSON.stringify({ name, type }) },
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, type }) },
     ),
 
   updateTimelineTrack: (pid: string, eid: string, trackId: string, data: Record<string, any>) =>
@@ -381,7 +385,9 @@ export const api = {
 
   exportTimeline: (pid: string, eid: string, data: { format?: string; sample_rate?: number; normalization_db?: number; clip_id?: string | null } = {}) =>
     fetch(`${BASE}/projects/${pid}/episodes/${eid}/timeline/export`, {
-      method: "POST", body: JSON.stringify({ format: "wav", sample_rate: 24000, normalization_db: -20, ...data }),
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ format: "wav", sample_rate: 24000, normalization_db: -20, ...data }),
     }).then(r => { if (!r.ok) throw new Error(r.statusText); return r.blob(); }),
 
   concatenateEpisodeAudio: (pid: string, eid: string, params?: { gap?: number; format?: string; sample_rate?: number }) => {

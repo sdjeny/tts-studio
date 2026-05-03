@@ -891,7 +891,7 @@ async def api_download_episode_audio(project_id: str, episode_id: str):
         if not zf_check.namelist():
             return JSONResponse(
                 status_code=404,
-                content={"error": "no_audio", "message": "该剧集没有可下载的音频文件"},
+                content={"error": "no_audio", "message": "No downloadable audio files in this episode"},
             )
 
     buf.seek(0)
@@ -944,8 +944,10 @@ async def api_concatenate_episode_audio(
         try:
             audio, sr = load_audio(rec["filename"], target_sr=sample_rate)
             audio_buffers.append(audio)
-        except Exception:
+        except Exception as e:
             skipped += 1
+            import logging
+            logging.warning(f"Failed to load audio {rec.get('filename', 'unknown')}: {e}")
 
     if not audio_buffers:
         raise HTTPException(404, "No audio files could be loaded")
