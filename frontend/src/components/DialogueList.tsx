@@ -21,6 +21,8 @@ export default function DialogueList({ project, episode, onChange, onError }: {
   const [toast, setToast] = useState<string | null>(null);
   const [autoEditIds, setAutoEditIds] = useState<Set<string>>(new Set());
 
+  const [, forceRender] = useState(0);
+
   const add = async () => {
     if (!text.trim() || !charId) return;
     try {
@@ -102,7 +104,8 @@ export default function DialogueList({ project, episode, onChange, onError }: {
     }
     newDialogues.splice(idx + 1, 0, placeholder);
     episode.dialogues = newDialogues;
-    onChange();
+    // 用 forceRender 触发本地渲染，不调用 onChange() 避免 load 覆盖 placeholder
+    forceRender(t => t + 1);
     try {
       const resp = await api.insertDialogue(project.id, episode.id, {
         after_dialogue_id: afterDlg.id,
