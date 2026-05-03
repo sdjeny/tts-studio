@@ -40,10 +40,10 @@ const RANGES: Record<keyof TtsDefaults, { min: number; max: number; step: number
 
 // 保守默认值（与服务端保持一致）
 const CONSERVATIVE_DEFAULTS: TtsDefaults = {
-  temperature: 0.3,
+  temperature: 0.05,
   do_sample: false,
-  top_k: 20,
-  top_p: 0.85,
+  top_k: 5,
+  top_p: 0.3,
   repetition_penalty: 1.1,
 };
 
