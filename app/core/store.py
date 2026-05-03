@@ -406,6 +406,23 @@ def insert_dialogue_after(project_id: str, episode_id: str, after_dialogue_id: s
     return None, 0
 
 
+def reorder_episode_dialogues(project_id: str, episode_id: str) -> int:
+    """重建整个 episode 的 order 连续性。返回修复的重复数。"""
+    data = _read()
+    for p in data["projects"]:
+        if p["id"] == project_id:
+            for ep in p["episodes"]:
+                if ep["id"] == episode_id:
+                    dialogues = ep["dialogues"]
+                    # 按当前 order 排序，然后重建连续 order
+                    dialogues.sort(key=lambda d: (d["order"], d.get("created_at", "")))
+                    for i, d in enumerate(dialogues):
+                        d["order"] = i
+                    _write(data)
+                    return len(dialogues)
+    return 0
+
+
 def delete_dialogue_and_audio_files(project_id: str, episode_id: str, dialogue_id: str) -> tuple[bool, int]:
     """删除对白及其所有关联的音频文件（磁盘 + 历史记录）。返回 (是否成功, 删除文件数)。"""
     audio_dir = DATA_DIR / "audio"

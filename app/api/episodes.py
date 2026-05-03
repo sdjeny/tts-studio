@@ -189,6 +189,16 @@ async def api_batch_add_dialogues(project_id: str, episode_id: str, body: list[B
     return results
 
 
+@router.post("/projects/{project_id}/episodes/{episode_id}/dialogues/reorder")
+async def api_reorder_dialogues(project_id: str, episode_id: str):
+    """重建整个 episode 的 order 连续性。用于修复历史遗留的 order 重复问题。"""
+    ep = get_episode(project_id, episode_id)
+    if not ep:
+        raise HTTPException(404, "Episode not found")
+    count = store.reorder_episode_dialogues(project_id, episode_id)
+    return {"ok": True, "dialogues": count}
+
+
 @router.post("/projects/{project_id}/episodes/{episode_id}/dialogues/insert")
 async def api_insert_dialogue(project_id: str, episode_id: str, body: DialogueInsert):
     ep = get_episode(project_id, episode_id)
