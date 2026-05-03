@@ -872,13 +872,27 @@ async def api_download_episode_audio(project_id: str, episode_id: str):
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
-        for d in ep.get("dialogues", []):
+        sorted_dialogues = sorted(ep.get("dialogues", []), key=lambda x: x.get("order", 0))
+        for d in sorted_dialogues:
             if d.get("current_audio_id"):
                 for ah in d.get("audio_history", []):
                     if ah["id"] == d["current_audio_id"]:
                         fp = AUDIO_DIR / ah.get("filename", "")
                         if fp.exists():
-                            zf.write(str(fp), arcname=ah.get("filename", "audio.wav"))
+                            order = d.get("order", 0)
+                            char_name = d.get("character_name", "unknown")
+                            dlg_id = d.get("id", "")
+                            arcname = f"{order:03d}_{char_name}_{dlg_id[:6]}.wav"
+                            zf.write(str(fp), arcname=arcname)
+
+    # Check if any files were added
+    buf.seek(0)
+    with zipfile.ZipFile(buf, "r") as zf_check:
+        if not zf_check.namelist():
+            return JSONResponse(
+                status_code=404,
+                content={"error": "no_audio", "message": "该剧集没有可下载的音频文件"},
+            )
 
     buf.seek(0)
     safe_title = "".join(c for c in ep["title"] if c.isalnum() or c in " _-")
@@ -887,6 +901,74 @@ async def api_download_episode_audio(project_id: str, episode_id: str):
         media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename={safe_title}_audio.zip"},
     )
+
+
+# ── concatenate endpoint ────────────────────────────────
+
+@router.get("/projects/{project_id}/episodes/{episode_id}/concatenate")
+async def api_concatenate_episode_audio(
+    project_id: str, episode_id: str,
+    gap: float = 0.5, format: str = "wav", sample_rate: int = 24000,
+):
+    """Concatenate all current audio for an episode into a single file, with gaps between clips."""
+    import numpy as np
+    import time
+    from app.core.timeline_audio import load_audio, save_audio
+
+    ep = get_episode(project_id, episode_id)
+    if not ep:
+        raise HTTPException(404, "Episode not found")
+
+    # Collect dialogues with current audio, sorted by order
+    dialogues_with_audio = []
+    for d in sorted(ep.get("dialogues", []), key=lambda x: x.get("order", 0)):
+        audio_id = d.get("current_audio_id")
+        if not audio_id:
+            continue
+        audio_rec = None
+        for ah in d.get("audio_history", []):
+            if ah["id"] == audio_id:
+                audio_rec = ah
+                break
+        if audio_rec and audio_rec.get("filename"):
+            dialogues_with_audio.append(audio_rec)
+
+    skipped = len(ep.get("dialogues", [])) - len(dialogues_with_audio)
+
+    if not dialogues_with_audio:
+        raise HTTPException(404, "No audio files found for this episode")
+
+    # Load audio buffers
+    audio_buffers = []
+    for rec in dialogues_with_audio:
+        try:
+            audio, sr = load_audio(rec["filename"], target_sr=sample_rate)
+            audio_buffers.append(audio)
+        except Exception:
+            skipped += 1
+
+    if not audio_buffers:
+        raise HTTPException(404, "No audio files could be loaded")
+
+    # Add silence gaps between clips
+    gap_samples = int(gap * sample_rate)
+    gap_buffer = np.zeros(gap_samples, dtype=np.float32)
+    result_parts = []
+    for i, buf in enumerate(audio_buffers):
+        result_parts.append(buf)
+        if i < len(audio_buffers) - 1:
+            result_parts.append(gap_buffer)
+    mixed = np.concatenate(result_parts)
+
+    # Save
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    out_fn = f"concat_{episode_id[:8]}_{timestamp}.{fmt}"
+    out_path = save_audio(mixed, out_fn, sample_rate)
+
+    safe_title = "".join(c for c in ep["title"] if c.isalnum() or c in " _-")
+    resp = FileResponse(str(out_path), filename=f"{safe_title}_concat.{fmt}", media_type="audio/wav")
+    resp.headers["X-Skipped-Count"] = str(skipped)
+    return resp
 
 
 # ── refresh / fix endpoints ─────────────────────────────
