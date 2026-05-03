@@ -208,6 +208,7 @@ export default function Timeline({ project, episode, onError }: {
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [showExport, setShowExport] = useState(false);
+  const [exportSampleRate, setExportSampleRate] = useState(24000);
 
   const audioCtxRef = useRef<AudioContext | null>(null);
   const sourcesRef = useRef<AudioBufferSourceNode[]>([]);
@@ -440,16 +441,16 @@ export default function Timeline({ project, episode, onError }: {
   };
 
   // Export
-  const handleExport = async (fmt: string = "wav") => {
+  const handleExport = async (fmt: string = "wav", clipId: string | null = null) => {
     try {
-      const blob = await api.exportTimeline(project.id, episode.id, { format: fmt, sample_rate: 24000, normalization_db: -20 });
+      const blob = await api.exportTimeline(project.id, episode.id, { format: fmt, sample_rate: exportSampleRate, normalization_db: -20, clip_id: clipId });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${episode.title || "export"}.${fmt}`;
+      a.download = clipId ? `clip_${clipId.slice(0, 8)}.${fmt}` : `${episode.title || "export"}.${fmt}`;
       a.click();
       URL.revokeObjectURL(url);
-      onError("✅ 导出完成");
+      onError(clipId ? "✅ 选中片段导出完成" : "✅ 导出完成");
     } catch (e: any) { onError(e.message); }
   };
 
@@ -503,8 +504,28 @@ export default function Timeline({ project, episode, onError }: {
             <button onClick={handleSnapshot} style={btnStyle}>💾 快照</button>
             <button onClick={() => setShowExport(!showExport)} style={{ ...btnStyle, color: "#22c55e", borderColor: "#22c55e" }}>📤 导出</button>
             {showExport && (
-              <div style={{ display: "flex", gap: 2 }}>
-                <button onClick={() => handleExport("wav")} style={{ ...btnStyle, color: "#22c55e" }}>WAV</button>
+              <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 8px", background: "#0c0f18", border: "1px solid #1e293b", borderRadius: 6 }}>
+                {/* Format selector */}
+                <select disabled value="wav" style={{ ...btnS, fontSize: 10, padding: "2px 4px", color: "#64748b" }} title="更多格式即将推出">
+                  <option value="wav">WAV</option>
+                  <option value="mp3" disabled>MP3 (即将推出)</option>
+                </select>
+                {/* Sample rate selector */}
+                <select value={exportSampleRate} onChange={e => setExportSampleRate(Number(e.target.value))} style={{ ...btnS, fontSize: 10, padding: "2px 4px" }}>
+                  <option value={16000}>16kHz</option>
+                  <option value={24000}>24kHz</option>
+                  <option value={48000}>48kHz</option>
+                </select>
+                {/* Export full timeline */}
+                <button onClick={() => handleExport("wav", null)} style={{ ...btnStyle, color: "#22c55e", fontSize: 10 }}>📤 导出完整时间线</button>
+                {/* Export selected clip */}
+                <button
+                  onClick={() => handleExport("wav", selectedClipId)}
+                  disabled={!selectedClipId}
+                  style={{ ...btnStyle, color: selectedClipId ? "#a855f6" : "#475569", fontSize: 10, borderColor: selectedClipId ? "#a855f6" : "#334155", cursor: selectedClipId ? "pointer" : "not-allowed" }}
+                >
+                  ✂ 导出选中片段
+                </button>
               </div>
             )}
           </>

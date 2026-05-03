@@ -47,8 +47,27 @@ export default function EpisodePanel({ project, onChange, onError }: {
     catch (e: any) { onError(e.message); }
   };
 
-  const dlAll = (eid: string) => {
-    window.open(api.downloadEpisodeAll(project.id, eid), "_blank");
+  const [showDownloadMenu, setShowDownloadMenu] = useState<Record<string, boolean>>({});
+
+  const hasAnyAudio = (ep: any) => {
+    return ep.dialogues?.some((d: any) => d.current_audio_id);
+  };
+
+  const handleConcatenateDownload = async (ep: any) => {
+    if (!hasAnyAudio(ep)) {
+      onError("⚠️ 该剧集没有任何音频，无法混音");
+      return;
+    }
+    try {
+      const blob = await api.concatenateEpisodeAudio(project.id, ep.id, { gap: 0.5, format: "wav", sample_rate: 24000 });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${ep.title || "episode"}_concat.wav`;
+      a.click();
+      URL.revokeObjectURL(url);
+      onError("✅ 混音导出完成");
+    } catch (e: any) { onError(e.message); }
   };
 
   const batchGenerate = async (ep: Project["episodes"][0]) => {
@@ -395,6 +414,29 @@ export default function EpisodePanel({ project, onChange, onError }: {
                     </div>
 
                     <button onClick={() => dlAll(ep.id)} style={smallBtn}>⬇ 下载全部音频</button>
+                    {/* Download dropdown */}
+                    <div style={{ position: "relative", display: "inline-flex" }}>
+                      <button
+                        onClick={() => setShowDownloadMenu(prev => ({ ...prev, [ep.id]: !prev[ep.id] }))}
+                        style={{ ...smallBtn, borderRadius: "0 4px 4px 0", borderLeft: "none", padding: "3px 6px" }}
+                      >▾</button>
+                      {showDownloadMenu[ep.id] && (
+                        <div style={{
+                          position: "absolute", top: "100%", right: 0, marginTop: 2,
+                          background: "#1e293b", border: "1px solid #334155", borderRadius: 6,
+                          boxShadow: "0 4px 12px rgba(0,0,0,0.4)", zIndex: 20, minWidth: 180,
+                        }}>
+                          <button
+                            onClick={() => { dlAll(ep.id); setShowDownloadMenu(prev => ({ ...prev, [ep.id]: false })); }}
+                            style={{ display: "block", width: "100%", textAlign: "left", padding: "6px 12px", background: "none", border: "none", color: "#e2e8f0", fontSize: 12, cursor: "pointer" }}
+                          >📦 打包下载 (ZIP)</button>
+                          <button
+                            onClick={() => { handleConcatenateDownload(ep); setShowDownloadMenu(prev => ({ ...prev, [ep.id]: false })); }}
+                            style={{ display: "block", width: "100%", textAlign: "left", padding: "6px 12px", background: "none", border: "none", color: "#e2e8f0", fontSize: 12, cursor: "pointer", borderTop: "1px solid #334155" }}
+                          >🎵 混音为单个文件</button>
+                        </div>
+                      )}
+                    </div>
                     {(() => {
                       const curEp = project.episodes.find((e: any) => e.id === expanded) || ep;
                       const hasGenerating = curEp.dialogues?.some((d: any) =>

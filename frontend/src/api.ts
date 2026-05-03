@@ -379,10 +379,21 @@ export const api = {
       { method: "POST", body: JSON.stringify({ target_db: targetDb }) },
     ),
 
-  exportTimeline: (pid: string, eid: string, data: { format?: string; sample_rate?: number; normalization_db?: number } = {}) =>
+  exportTimeline: (pid: string, eid: string, data: { format?: string; sample_rate?: number; normalization_db?: number; clip_id?: string | null } = {}) =>
     fetch(`${BASE}/projects/${pid}/episodes/${eid}/timeline/export`, {
       method: "POST", body: JSON.stringify({ format: "wav", sample_rate: 24000, normalization_db: -20, ...data }),
     }).then(r => { if (!r.ok) throw new Error(r.statusText); return r.blob(); }),
+
+  concatenateEpisodeAudio: (pid: string, eid: string, params?: { gap?: number; format?: string; sample_rate?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.gap !== undefined) q.set("gap", String(params.gap));
+    if (params?.format) q.set("format", params.format);
+    if (params?.sample_rate) q.set("sample_rate", String(params.sample_rate));
+    return fetch(`${BASE}/projects/${pid}/episodes/${eid}/concatenate?${q}`).then(r => {
+      if (!r.ok) throw new Error(r.statusText);
+      return r.blob();
+    });
+  },
 
   previewTimelineUrl: (pid: string, eid: string) =>
     `${BASE}/projects/${pid}/episodes/${eid}/timeline/preview`,
