@@ -171,6 +171,11 @@ instruct 规则：
 - [x] `app/api/episodes.py` — TTS 提交根据 style_enabled 决定 instruct（单条、批量、刷新重试 3 处）
 - [x] `app/api/episodes.py` — generate-batch 改为 SSE 流式响应
 - [x] `app/api/projects.py` — CharacterCreate 透传 base_instruct
+- [x] `app/api/episodes.py` — 新增 POST /dialogues/insert 端点（DialogueInsert schema）
+- [x] `app/api/episodes.py` — 新增 POST /dialogues/reorder 端点：重建 order 连续性
+- [x] `app/core/store.py` — insert_dialogue_after() 函数：在指定对白后插入新对白，自动重排 order
+- [x] `app/core/store.py` — reorder_episode_dialogues() 函数：重建 order 连续性
+- [x] `app/core/store.py` — insert_dialogue_after 角色 fallback：角色不存在时 fallback 到第一个角色（M-3 + m-1 修复）
 
 ### 前端改动
 
@@ -183,6 +188,11 @@ instruct 规则：
 - [x] 剧集头部加风格开关按钮
 - [x] Episode / Dialogue 类型加 style_enabled 字段
 - [x] updateDialogue / updateEpisode API 类型加 style_enabled
+- [x] `frontend/src/components/DialogueList.tsx` — handleInsert 函数：placeholder 机制 + localDialogues state
+- [x] `frontend/src/components/DialogueList.tsx` — autoEditIds 机制：插入后自动进入编辑态
+- [x] `frontend/src/components/DialogueList.tsx` — 失败精确回滚：setLocalDialogues(null) + onChange()
+- [x] `frontend/src/components/DialogueList.tsx` — 每条对白添加「+」插入按钮
+- [x] `frontend/src/api.ts` — 封装 `insertDialogue` API 调用
 
 ## 兼容说明
 

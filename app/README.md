@@ -102,6 +102,8 @@ npm run dev
 | DELETE | `/api/projects/{id}/episodes/{eid}/dialogues/{did}` | 删除对白 |
 | DELETE | `/api/projects/{id}/episodes/{eid}/dialogues/{did}/purge` | 删除对白及音频文件 |
 | DELETE | `/api/projects/{id}/episodes/{eid}/purge-dialogues` | 批量删除剧集对白 |
+| POST | `/api/projects/{id}/episodes/{eid}/dialogues/insert` | 在指定对白后插入新对白（自动重排 order） |
+| POST | `/api/projects/{id}/episodes/{eid}/dialogues/reorder` | 重建 order 连续性（修复历史遗留重复问题） |
 
 ### 音频生成
 
