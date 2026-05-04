@@ -503,6 +503,11 @@ def create_clone():
         log.warning("[create_clone] 400: audio_data 为空")
         return jsonify({"error": "音频数据为空"}), 400
 
+    # x_vector_only=False 时 ref_text 必填
+    if not x_vector_only and not ref_text:
+        log.warning("[create_clone] 400: 未填参考文本且未开启 x_vector_only 模式")
+        return jsonify({"error": "请填写参考文本，或勾选「仅使用说话人向量」模式"}), 400
+
     # 检查是否已存在
     if _clone_dir(name).exists():
         return jsonify({"error": f"voice clone '{name}' 已存在，请先删除或使用其他名称"}), 409
