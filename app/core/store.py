@@ -7,6 +7,33 @@ import copy
 from pathlib import Path
 from typing import Any
 
+import yaml as _yaml
+
+_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
+
+
+def _load_tts_defaults() -> dict:
+    """从 config.yaml 读取 tts.defaults，fallback 到保守默认值。"""
+    _CONSERVATIVE = {
+        "temperature": 0.05,
+        "do_sample": False,
+        "top_k": 5,
+        "top_p": 0.3,
+        "repetition_penalty": 1.1,
+    }
+    try:
+        if _CONFIG_PATH.exists():
+            with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+                cfg = _yaml.safe_load(f) or {}
+            tts_defaults = cfg.get("tts", {}).get("defaults")
+            if tts_defaults and isinstance(tts_defaults, dict):
+                # 确保所有必要字段存在，缺失的用保守值补充
+                merged = {**_CONSERVATIVE, **tts_defaults}
+                return merged
+    except Exception:
+        pass
+    return _CONSERVATIVE
+
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 DATA_FILE = DATA_DIR / "studio.json"
 
@@ -101,13 +128,7 @@ def create_project(name: str) -> dict:
         # ── 项目级 TTS 默认参数 ────────────────────────────────
         # 当对白生成音频时未显式指定采样参数，则使用此处的值。
         # 保守默认值旨在最小化不同句子间的声音波动。
-        "tts_defaults": {
-            "temperature": 0.05,         # 采样温度，越低越稳定（官方默认 0.9）
-            "do_sample": False,          # True=采样 / False=贪心解码
-            "top_k": 5,                  # top-k 采样，越小越集中（官方默认 50）
-            "top_p": 0.3,                # 核采样阈值，越小越集中（官方默认 1.0）
-            "repetition_penalty": 1.1,   # 重复惩罚（官方默认 1.05）
-        },
+        "tts_defaults": _load_tts_defaults(),
     }
     data["projects"].append(project)
     _write(data)

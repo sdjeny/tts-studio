@@ -122,6 +122,9 @@ export const api = {
   deleteProject: (id: string) =>
     request<void>(`/projects/${id}`, { method: "DELETE" }),
 
+  // global defaults
+  getGlobalDefaults: () => request<TtsDefaults>("/projects/defaults"),
+
   // characters
   listCharacters: (pid: string) =>
     request<Character[]>(`/projects/${pid}/characters`),

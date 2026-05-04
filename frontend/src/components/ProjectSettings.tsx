@@ -70,12 +70,20 @@ export default function ProjectSettings({ project, onChange, onError }: Props) {
   }));
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [globalDefaults, setGlobalDefaults] = useState<TtsDefaults>(CONSERVATIVE_DEFAULTS);
 
   // 项目切换时重置
   useEffect(() => {
     setValues({ ...CONSERVATIVE_DEFAULTS, ...project.tts_defaults });
     setDirty(false);
   }, [project.id, project.tts_defaults]);
+
+  // 从 API 加载全局默认值
+  useEffect(() => {
+    api.getGlobalDefaults()
+      .then(setGlobalDefaults)
+      .catch(() => {}); // 失败时使用硬编码 fallback
+  }, []);
 
   const updateField = (field: keyof TtsDefaults, val: number | boolean) => {
     setValues((prev) => ({ ...prev, [field]: val }));
@@ -95,8 +103,8 @@ export default function ProjectSettings({ project, onChange, onError }: Props) {
     setSaving(false);
   };
 
-  const handleResetConservative = () => {
-    setValues({ ...CONSERVATIVE_DEFAULTS });
+  const handleResetToGlobal = () => {
+    setValues({ ...globalDefaults });
     setDirty(true);
   };
 
@@ -140,8 +148,8 @@ export default function ProjectSettings({ project, onChange, onError }: Props) {
       {/* 快捷预设 */}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <span style={{ fontSize: 12, color: "#64748b", alignSelf: "center", marginRight: 4 }}>快捷预设：</span>
-        <button onClick={handleResetConservative} style={btnPreset}>
-          🛡️ 保守（声音稳定）
+        <button onClick={handleResetToGlobal} style={btnPreset}>
+          🔄 恢复全局默认
         </button>
         <button onClick={handleResetOfficial} style={btnPreset}>
           🔬 官方默认（变化较大）

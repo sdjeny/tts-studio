@@ -220,3 +220,8 @@ async def api_preview_effects(project_id: str, body: EffectsPreviewRequest):
     return Response(content=buf.getvalue(), media_type="audio/wav")
 
 
+@router.get("/projects/defaults")
+async def api_get_global_defaults():
+    """返回全局 TTS 默认参数（从 config.yaml 读取）。"""
+    from app.core.store import _load_tts_defaults
+    return _load_tts_defaults()
