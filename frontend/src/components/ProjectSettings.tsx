@@ -15,8 +15,8 @@ import { useState, useEffect } from "react";
 import { api, Project, TtsDefaults } from "../api";
 import { VOICE_OPTIONS } from "../constants";
 
-// 各参数的取值范围和步长
-const RANGES: Record<keyof TtsDefaults, { min: number; max: number; step: number; label: string; desc: string }> = {
+// 各参数的取值范围和步长（voice_id 是字符串，单独处理）
+const RANGES: Record<keyof Omit<TtsDefaults, "voice_id">, { min: number; max: number; step: number; label: string; desc: string }> = {
   temperature: {
     min: 0.05, max: 1.5, step: 0.05, label: "温度 (temperature)",
     desc: "越低越稳定。0.1~0.3 声音一致性最好，0.7+ 变化较大。",
@@ -32,10 +32,6 @@ const RANGES: Record<keyof TtsDefaults, { min: number; max: number; step: number
   top_p: {
     min: 0.3, max: 1.0, step: 0.05, label: "Top-P（核采样）",
     desc: "越小越集中。0.7~0.9 推荐，1.0=不截断。",
-  },
-  voice_id: {
-    min: 0, max: 0, step: 0, label: "默认音色 (voice_id)",
-    desc: "项目级默认音色，对白生成时未指定音色则使用此值。",
   },
   repetition_penalty: {
     min: 1.0, max: 2.0, step: 0.05, label: "重复惩罚",
@@ -163,12 +159,52 @@ export default function ProjectSettings({ project, onChange, onError }: Props) {
         </button>
       </div>
 
+      {/* 音色选择（字符串类型，单独处理） */}
+      <div style={{
+        background: "#0f1117",
+        border: "1px solid #1e293b",
+        borderRadius: 8,
+        padding: "12px 14px",
+      }}>
+        <div style={labelStyle}>
+          <label style={{ fontSize: 13, color: "#e2e8f0", fontWeight: 600 }}>
+            默认音色 (voice_id)
+          </label>
+          <span style={{
+            fontSize: 14,
+            color: "#3b82f6",
+            fontWeight: 700,
+            fontVariantNumeric: "tabular-nums",
+            minWidth: 48,
+            textAlign: "right",
+          }}>
+            {values.voice_id}
+          </span>
+        </div>
+        <div style={{ fontSize: 11, color: "#64748b", marginBottom: 8 }}>
+          项目级默认音色，对白生成时未指定音色则使用此值。
+        </div>
+        <select
+          value={values.voice_id}
+          onChange={(e) => updateField("voice_id", e.target.value)}
+          style={{
+            width: "100%", padding: "8px 10px",
+            background: "#1e293b", color: "#e2e8f0",
+            border: "1px solid #334155", borderRadius: 6,
+            fontSize: 13, cursor: "pointer",
+          }}
+        >
+          {VOICE_OPTIONS.map((v) => (
+            <option key={v} value={v}>{v}</option>
+          ))}
+        </select>
+      </div>
+
       {/* 各参数滑块 */}
-      {(Object.keys(RANGES) as (keyof TtsDefaults)[]).map((field) => {
+      {(Object.keys(RANGES) as (keyof typeof RANGES)[]).map((field) => {
         const cfg = RANGES[field];
         const val = values[field];
         const isBoolean = field === "do_sample";
-        const isVoiceId = field === "voice_id";
 
         return (
           <div key={field} style={{
@@ -221,21 +257,6 @@ export default function ProjectSettings({ project, onChange, onError }: Props) {
                   贪心（最稳定）
                 </button>
               </div>
-            ) : isVoiceId ? (
-              <select
-                value={val as string}
-                onChange={(e) => updateField("voice_id", e.target.value)}
-                style={{
-                  width: "100%", padding: "8px 10px",
-                  background: "#1e293b", color: "#e2e8f0",
-                  border: "1px solid #334155", borderRadius: 6,
-                  fontSize: 13, cursor: "pointer",
-                }}
-              >
-                {VOICE_OPTIONS.map((v) => (
-                  <option key={v} value={v}>{v}</option>
-                ))}
-              </select>
             ) : (
               <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                 <span style={{ fontSize: 10, color: "#475569" }}>{cfg.min}</span>
@@ -253,7 +274,7 @@ export default function ProjectSettings({ project, onChange, onError }: Props) {
             )}
 
             {/* 标记当前值偏离保守默认的程度 */}
-            {field !== "do_sample" && field !== "voice_id" && (val as number) !== CONSERVATIVE_DEFAULTS[field] && (
+            {field !== "do_sample" && (val as number) !== CONSERVATIVE_DEFAULTS[field] && (
               <div style={{ fontSize: 10, color: "#475569", marginTop: 4 }}>
                 ℹ 保守默认: {CONSERVATIVE_DEFAULTS[field]} / 官方默认: {OFFICIAL_DEFAULTS[field]}
               </div>
