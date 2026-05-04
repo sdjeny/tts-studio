@@ -163,11 +163,12 @@ def save_voice_clone(name: str, prompt_item, audio_data, audio_sr,
     sf.write(str(audio_path), audio_data, audio_sr)
 
     # 2. 保存 embedding pt（VoiceClonePromptItem 序列化）
+    # generate_voice_clone 内部用 [index] 下标访问，bool 字段需包装为列表
     save_data = {
-        "ref_code": prompt_item.ref_code,
-        "ref_spk_embedding": prompt_item.ref_spk_embedding,
-        "x_vector_only_mode": prompt_item.x_vector_only_mode,
-        "icl_mode": prompt_item.icl_mode,
+        "ref_code": [prompt_item.ref_code],
+        "ref_spk_embedding": [prompt_item.ref_spk_embedding],
+        "x_vector_only_mode": [prompt_item.x_vector_only_mode],
+        "icl_mode": [prompt_item.icl_mode],
         "ref_text": prompt_item.ref_text,
     }
     pt_path = d / "embedding.pt"
