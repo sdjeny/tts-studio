@@ -437,24 +437,35 @@ def create_clone():
     description = ""
     x_vector_only = False
 
-    if request.content_type and "multipart/form-data" in request.content_type:
+    ct = request.content_type or ""
+    log.info("[create_clone] content_type=%s, content_length=%s", ct, request.content_length)
+
+    if "multipart/form-data" in ct:
         name = (request.form.get("name") or "").strip()
         ref_text = (request.form.get("instruct") or "").strip()
         description = (request.form.get("description") or "").strip()
         x_vector_only = (request.form.get("x_vector_only") or "false").lower() == "true"
 
+        log.info("[create_clone] form: name=%s, ref_text=%s, has_audio=%s", name, ref_text, "audio" in request.files)
+
         if "audio" not in request.files:
+            log.warning("[create_clone] 400: 未找到 audio 字段，files=%s", list(request.files.keys()))
             return jsonify({"error": "请上传音频文件（field: audio）"}), 400
         audio_file = request.files["audio"]
         if not audio_file.filename:
+            log.warning("[create_clone] 400: 音频文件名为空")
             return jsonify({"error": "音频文件为空"}), 400
 
         import soundfile as sf
         try:
-            data, sr = sf.read(io.BytesIO(audio_file.read()))
+            raw_bytes = audio_file.read()
+            log.info("[create_clone] 音频文件大小: %d bytes", len(raw_bytes))
+            data, sr = sf.read(io.BytesIO(raw_bytes))
             audio_data = data
             audio_sr = sr
+            log.info("[create_clone] 音频读取成功: sr=%d, shape=%s", sr, data.shape)
         except Exception as e:
+            log.error("[create_clone] 400: 音频读取失败: %s", e)
             return jsonify({"error": f"无法读取音频文件: {e}"}), 400
     else:
         data = request.get_json(silent=True) or {}
@@ -465,6 +476,7 @@ def create_clone():
 
         audio_b64 = data.get("audio_base64", "")
         if not audio_b64:
+            log.warning("[create_clone] 400: 非 multipart 且无 audio_base64")
             return jsonify({"error": "请提供 audio_base64 或上传音频文件"}), 400
 
         import soundfile as sf
@@ -472,11 +484,14 @@ def create_clone():
             raw = base64.b64decode(audio_b64)
             audio_data, audio_sr = sf.read(io.BytesIO(raw))
         except Exception as e:
+            log.error("[create_clone] 400: base64 解码失败: %s", e)
             return jsonify({"error": f"无法解码音频: {e}"}), 400
 
     if not name:
+        log.warning("[create_clone] 400: name 为空")
         return jsonify({"error": "name 不能为空"}), 400
     if audio_data is None:
+        log.warning("[create_clone] 400: audio_data 为空")
         return jsonify({"error": "音频数据为空"}), 400
 
     # 检查是否已存在
