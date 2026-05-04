@@ -135,12 +135,21 @@ def list_voice_clones() -> list[dict]:
 
 
 def load_voice_clone_prompt(name: str):
-    """加载 voice clone 的 embedding pt"""
+    """加载 voice clone 的 embedding pt，兼容旧格式（单个值）"""
     pt_path = _clone_pt_path(name)
     if not pt_path.exists():
         return None
     import torch
     data = torch.load(str(pt_path), map_location="cpu", weights_only=False)
+    # 兼容旧格式：单个 bool/Tensor → 包装为单元素列表
+    if "x_vector_only_mode" in data and not isinstance(data["x_vector_only_mode"], list):
+        data["x_vector_only_mode"] = [data["x_vector_only_mode"]]
+    if "icl_mode" in data and not isinstance(data["icl_mode"], list):
+        data["icl_mode"] = [data["icl_mode"]]
+    if "ref_code" in data and not isinstance(data["ref_code"], list):
+        data["ref_code"] = [data["ref_code"]]
+    if "ref_spk_embedding" in data and not isinstance(data["ref_spk_embedding"], list):
+        data["ref_spk_embedding"] = [data["ref_spk_embedding"]]
     return data
 
 
@@ -163,13 +172,12 @@ def save_voice_clone(name: str, prompt_item, audio_data, audio_sr,
     sf.write(str(audio_path), audio_data, audio_sr)
 
     # 2. 保存 embedding pt（VoiceClonePromptItem 序列化）
-    # generate_voice_clone 内部用 [index] 下标访问，bool 字段需包装为列表
+    # generate_voice_clone 内部用 [index] 下标访问，所有字段需包装为单元素列表
     save_data = {
         "ref_code": [prompt_item.ref_code],
         "ref_spk_embedding": [prompt_item.ref_spk_embedding],
         "x_vector_only_mode": [prompt_item.x_vector_only_mode],
         "icl_mode": [prompt_item.icl_mode],
-        "ref_text": prompt_item.ref_text,
     }
     pt_path = d / "embedding.pt"
     torch.save(save_data, str(pt_path))
