@@ -67,6 +67,13 @@ async def api_list_projects():
     return list_projects()
 
 
+@router.get("/projects/defaults")
+async def api_get_global_defaults():
+    """返回全局 TTS 默认参数（从 config.yaml 读取）。"""
+    from app.core.store import _load_tts_defaults
+    return _load_tts_defaults()
+
+
 @router.get("/projects/{project_id}")
 async def api_get_project(project_id: str):
     p = get_project(project_id)
@@ -218,10 +225,3 @@ async def api_preview_effects(project_id: str, body: EffectsPreviewRequest):
 
     from fastapi.responses import Response
     return Response(content=buf.getvalue(), media_type="audio/wav")
-
-
-@router.get("/projects/defaults")
-async def api_get_global_defaults():
-    """返回全局 TTS 默认参数（从 config.yaml 读取）。"""
-    from app.core.store import _load_tts_defaults
-    return _load_tts_defaults()
