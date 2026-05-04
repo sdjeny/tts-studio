@@ -135,22 +135,56 @@ def list_voice_clones() -> list[dict]:
 
 
 def load_voice_clone_prompt(name: str):
-    """加载 voice clone 的 embedding pt，兼容旧格式（单个值）"""
+    """
+    加载 voice clone，返回 VoiceClonePromptItem 列表。
+    模型 generate_voice_clone 的 list 分支会正确构建 ref_ids，
+    避免 dict 分支 ref_texts_for_ids=None 的问题。
+    兼容旧格式（单个值而非列表）。
+    """
+    from qwen_tts.inference.qwen3_tts_model import VoiceClonePromptItem
+
     pt_path = _clone_pt_path(name)
     if not pt_path.exists():
         return None
     import torch
     data = torch.load(str(pt_path), map_location="cpu", weights_only=False)
+
+    # 从 meta.json 读取 ref_text
+    meta_path = _clone_dir(name) / "meta.json"
+    ref_text = ""
+    if meta_path.exists():
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                ref_text = json.load(f).get("ref_text", "")
+        except Exception:
+            pass
+
     # 兼容旧格式：单个 bool/Tensor → 包装为单元素列表
-    if "x_vector_only_mode" in data and not isinstance(data["x_vector_only_mode"], list):
-        data["x_vector_only_mode"] = [data["x_vector_only_mode"]]
-    if "icl_mode" in data and not isinstance(data["icl_mode"], list):
-        data["icl_mode"] = [data["icl_mode"]]
-    if "ref_code" in data and not isinstance(data["ref_code"], list):
-        data["ref_code"] = [data["ref_code"]]
-    if "ref_spk_embedding" in data and not isinstance(data["ref_spk_embedding"], list):
-        data["ref_spk_embedding"] = [data["ref_spk_embedding"]]
-    return data
+    xvec = data.get("x_vector_only_mode", False)
+    icl = data.get("icl_mode", True)
+    ref_code = data.get("ref_code")
+    ref_spk = data.get("ref_spk_embedding")
+
+    if not isinstance(xvec, list):
+        xvec = [xvec]
+    if not isinstance(icl, list):
+        icl = [icl]
+    if not isinstance(ref_code, (list, tuple)):
+        ref_code = [ref_code]
+    if not isinstance(ref_spk, (list, tuple)):
+        ref_spk = [ref_spk]
+
+    # 构造 VoiceClonePromptItem 列表（走 list 分支，模型内部正确处理 ref_ids）
+    items = []
+    for i in range(len(xvec)):
+        items.append(VoiceClonePromptItem(
+            ref_code=ref_code[i],
+            ref_spk_embedding=ref_spk[i],
+            x_vector_only_mode=xvec[i],
+            icl_mode=icl[i],
+            ref_text=ref_text if ref_text else None,
+        ))
+    return items
 
 
 def save_voice_clone(name: str, prompt_item, audio_data, audio_sr,
@@ -240,12 +274,11 @@ def worker_loop():
             }
 
             # ── 加载 voice clone prompt ──────────────────────
-            voice_clone_prompt = None
+            prompt_items = None
             if speaker:
-                prompt_data = load_voice_clone_prompt(speaker)
-                if prompt_data is not None:
-                    voice_clone_prompt = prompt_data
-                    log.info("[%s] 已加载 voice clone: %s", task_id[:8], speaker)
+                prompt_items = load_voice_clone_prompt(speaker)
+                if prompt_items is not None:
+                    log.info("[%s] 已加载 voice clone: %s (%d items)", task_id[:8], speaker, len(prompt_items))
                 else:
                     log.warning("[%s] voice clone '%s' 未找到", task_id[:8], speaker)
 
@@ -258,11 +291,11 @@ def worker_loop():
             )
 
             # ── 调用 Base 模型的 generate_voice_clone ──────────
-            if voice_clone_prompt is not None:
+            if prompt_items is not None:
                 wavs, sr = model.generate_voice_clone(
                     text=text,
                     language=language,
-                    voice_clone_prompt=voice_clone_prompt,
+                    voice_clone_prompt=prompt_items,
                     non_streaming_mode=True,
                     **generate_kwargs,
                 )
