@@ -1,11 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
-import { api, Project, Character, AudioEffect, EffectRegistryItem, EffectPreset } from "../api";
+import { VOICE_OPTIONS } from "../constants";
 
-const VOICE_OPTIONS = [
-  "aiden", "dylan", "eric", "ono_anna", "ryan", "serena", "sohee", "uncle_fu", "vivian",
-];
-
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const _emptyEffect = (type: string): AudioEffect => ({
   type,
   enabled: true,
