@@ -88,6 +88,7 @@ export interface TtsDefaults {
   top_k: number;             // top-k 采样，越小越集中，建议 10~100
   top_p: number;             // 核采样阈值，越小越集中，建议 0.5~1.0
   repetition_penalty: number;// 重复惩罚，>1.0 抑制重复，建议 1.0~1.5
+  voice_id: string;          // 默认音色，可选: aiden/dylan/eric/ono_anna/ryan/serena/sohee/uncle_fu/vivian
 }
 
 export interface Project {

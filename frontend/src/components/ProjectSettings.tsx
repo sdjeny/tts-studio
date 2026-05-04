@@ -45,6 +45,7 @@ const CONSERVATIVE_DEFAULTS: TtsDefaults = {
   top_k: 5,
   top_p: 0.3,
   repetition_penalty: 1.1,
+  voice_id: "aiden",
 };
 
 // 官方默认值（对比用）
@@ -54,6 +55,7 @@ const OFFICIAL_DEFAULTS: TtsDefaults = {
   top_k: 50,
   top_p: 1.0,
   repetition_penalty: 1.05,
+  voice_id: "aiden",
 };
 
 interface Props {
