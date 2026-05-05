@@ -288,6 +288,50 @@ export const api = {
       `/projects/${pid}/episodes/${eid}/generate-dialogues`,
       { method: "POST", body: JSON.stringify({ instruction, target_duration_min: targetDurationMin, narration_ratio: narrationRatio }) }
     ),
+  generateDialoguesStream: (
+    pid: string, eid: string,
+    instruction: string = "",
+    targetDurationMin: number = 25,
+    narrationRatio: number = 50,
+    onEvent: (event: string, data: any) => void
+  ): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      fetch(`/api/projects/${pid}/episodes/${eid}/generate-dialogues`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ instruction, target_duration_min: targetDurationMin, narration_ratio: narrationRatio }),
+      }).then(async (res) => {
+        if (!res.ok) {
+          const msg = await res.text();
+          reject(new Error(msg));
+          return;
+        }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const parts = buf.split("\n\n");
+          buf = parts.pop() || "";
+          for (const part of parts) {
+            if (!part.trim()) continue;
+            const eventMatch = part.match(/^event: (.+)$/m);
+            const dataMatch = part.match(/^data: (.+)$/m);
+            if (eventMatch && dataMatch) {
+              try {
+                onEvent(eventMatch[1], JSON.parse(dataMatch[1]));
+              } catch (e) {
+                onEvent(eventMatch[1], dataMatch[1]);
+              }
+            }
+          }
+        }
+        resolve();
+      }).catch(reject);
+    });
+  },
   generateNextEpisode: (pid: string, eid: string) =>
     request<{ episode_id: string; title: string; summary: string }>(
       `/projects/${pid}/episodes/${eid}/generate-next`,
