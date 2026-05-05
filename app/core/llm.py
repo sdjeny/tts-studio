@@ -36,7 +36,7 @@ def chat(messages: list[dict], **overrides) -> str:
     base_url = cfg.get("base_url", "").rstrip("/")
     api_key = cfg.get("api_key", "")
     model = cfg.get("model", "gpt-4o")
-    timeout = cfg.get("timeout", 120)
+    timeout = cfg.get("timeout", 300)
     max_tokens = cfg.get("max_tokens", 4096)
     temperature = cfg.get("temperature", 0.7)
 
