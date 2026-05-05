@@ -1680,8 +1680,9 @@ async def api_generate_dialogues(project_id: str, episode_id: str, body: Dialogu
         }
 
     async def sse_stream():
+        import json as _sse_json
         async for event_type, data in _generate():
-            yield f"event: {event_type}\ndata: {_json.dumps(data, ensure_ascii=False)}\n\n".encode("utf-8")
+            yield f"event: {event_type}\ndata: {_sse_json.dumps(data, ensure_ascii=False)}\n\n".encode("utf-8")
 
     return StreamingResponse(sse_stream(), media_type="text/event-stream")
 
