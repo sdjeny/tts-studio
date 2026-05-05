@@ -48,6 +48,10 @@ export default function EpisodePanel({ project, onChange, onError }: {
     catch (e: any) { onError(e.message); }
   };
 
+  const dlAll = (eid: string) => {
+    window.open(api.downloadEpisodeAll(project.id, eid), "_blank");
+  };
+
   const [showDownloadMenu, setShowDownloadMenu] = useState<Record<string, boolean>>({});
 
   const hasAnyAudio = (ep: any) => {

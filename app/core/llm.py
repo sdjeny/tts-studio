@@ -30,6 +30,7 @@ def chat(messages: list[dict], **overrides) -> str:
     """
     发送 chat 请求，返回 assistant 回复文本。
     messages: [{"role": "system"|"user"|"assistant", "content": "..."}]
+    overrides 可覆盖: model, max_tokens, temperature, timeout
     """
     cfg = get_llm_config()
     base_url = cfg.get("base_url", "").rstrip("/")
@@ -43,6 +44,7 @@ def chat(messages: list[dict], **overrides) -> str:
     model = overrides.get("model", model)
     max_tokens = overrides.get("max_tokens", max_tokens)
     temperature = overrides.get("temperature", temperature)
+    timeout = overrides.get("timeout", timeout)
 
     if not base_url:
         raise Exception("LLM base_url 未配置，请检查 app/config.yaml")

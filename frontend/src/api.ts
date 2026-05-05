@@ -306,7 +306,7 @@ export const api = {
           reject(new Error(msg));
           return;
         }
-        const reader = res.body.getReader();
+        const reader = res.body!.getReader();
         const decoder = new TextDecoder();
         let buf = "";
         while (true) {
