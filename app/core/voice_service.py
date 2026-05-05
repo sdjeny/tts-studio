@@ -8,18 +8,7 @@ import httpx
 
 _CACHE_PATH = Path("data/voice_cache.json")
 
-# L4: 硬编码兜底（与 _VALID_VOICES 保持一致）
-_FALLBACK_SPEAKERS = [
-    {"name": "Aiden", "description": "阳光美声中音，清亮通透"},
-    {"name": "Dylan", "description": "青春北京男声，清澈自然"},
-    {"name": "Eric", "description": "活泼成都男声，略带沙哑的明亮感"},
-    {"name": "Ono Anna", "description": "俏皮日式女声，轻盈灵动"},
-    {"name": "Ryan", "description": "动感男声，节奏感强"},
-    {"name": "Serena", "description": "温柔年轻女声，暖甜细腻"},
-    {"name": "Sohee", "description": "温暖韩语女声，情感丰富"},
-    {"name": "Uncle Fu", "description": "成熟男声，低沉醇厚"},
-    {"name": "Vivian", "description": "明亮年轻女声，略带锐利"},
-]
+from app.core.speakers import _get_fallback_speakers as _FALLBACK_SPEAKERS_FN
 
 async def get_speakers() -> list[dict]:
     """四级降级获取说话声列表"""
@@ -58,7 +47,7 @@ async def get_speakers() -> list[dict]:
         pass
 
     # L4: 硬编码兜底
-    return _FALLBACK_SPEAKERS
+    return _FALLBACK_SPEAKERS_FN()
 
 
 def _save_cache(speakers: list[dict]):
