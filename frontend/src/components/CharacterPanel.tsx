@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { api, Project, Character, AudioEffect, EffectRegistryItem, EffectPreset } from "../api";
+import { api, Project, Character, AudioEffect, EffectRegistryItem, EffectPreset, VoiceInfo } from "../api";
 import { VOICE_OPTIONS } from "../constants";
 
 const _emptyEffect = (type: string): AudioEffect => ({
@@ -53,6 +53,13 @@ export default function CharacterPanel({ project, onChange, onError }: {
   const [editing, setEditing] = useState<string | null>(null);
   const [registry, setRegistry] = useState<EffectRegistryItem[]>([]);
   const [presets, setPresets] = useState<Record<string, EffectPreset>>({});
+  const [voices, setVoices] = useState<Array<{ name: string; description: string }>>(VOICE_OPTIONS);
+
+  useEffect(() => {
+    api.listVoices()
+      .then(v => setVoices(v.voices))
+      .catch(() => {}); // fallback to VOICE_OPTIONS already set
+  }, []);
 
   useEffect(() => {
     api.getEffectsRegistry().then(setRegistry).catch(() => {});
@@ -113,7 +120,7 @@ export default function CharacterPanel({ project, onChange, onError }: {
           <input placeholder="角色名" value={name} onChange={(e) => setName(e.target.value)}
             style={inputStyle} />
           <select value={voiceId} onChange={(e) => setVoiceId(e.target.value)} style={inputStyle}>
-            {VOICE_OPTIONS.map(v => <option key={v} value={v}>{v}</option>)}
+            {voices.map(v => <option key={v.name} value={v.name}>{v.name} — {v.description}</option>)}
           </select>
           <button onClick={add} style={{ ...btnBlue, padding: "8px 20px" }}>添加</button>
         </div>
@@ -146,7 +153,7 @@ export default function CharacterPanel({ project, onChange, onError }: {
               borderRadius: 8, padding: "12px 16px",
             }}>
               {editing === ch.id ? (
-                <EditRow char={ch} registry={registry} presets={presets} onSave={saveEdit} onCancel={() => setEditing(null)} onPreview={previewAudio} />
+                <EditRow char={ch} registry={registry} presets={presets} voices={voices} onSave={saveEdit} onCancel={() => setEditing(null)} onPreview={previewAudio} />
               ) : (
                 <div>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -188,10 +195,11 @@ export default function CharacterPanel({ project, onChange, onError }: {
   );
 }
 
-function EditRow({ char, registry, presets, onSave, onCancel, onPreview }: {
+function EditRow({ char, registry, presets, voices, onSave, onCancel, onPreview }: {
   char: Character;
   registry: EffectRegistryItem[];
   presets: Record<string, EffectPreset>;
+  voices: Array<{ name: string; description: string }>;
   onSave: (id: string, data: Partial<Character>) => void;
   onCancel: () => void;
   onPreview: (effects: AudioEffect[], characterId?: string) => void;
@@ -257,7 +265,7 @@ function EditRow({ char, registry, presets, onSave, onCancel, onPreview }: {
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         <input value={name} onChange={(e) => setName(e.target.value)} style={{ ...inputStyle, flex: 1, minWidth: 100 }} />
         <select value={voiceId} onChange={(e) => setVoiceId(e.target.value)} style={inputStyle}>
-          {VOICE_OPTIONS.map(v => <option key={v} value={v}>{v}</option>)}
+          {voices.map(v => <option key={v.name} value={v.name}>{v.name} — {v.description}</option>)}
         </select>
         <label style={{ color: "#94a3b8", fontSize: 12, display: "flex", alignItems: "center", gap: 4 }}>
           语速{speed.toFixed(1)}

@@ -128,7 +128,7 @@ class TtsClient:
         return url
 
     # ── 内部请求 ──────────────────────────────────────
-    def _request(self, method: str, path: str, data: dict = None):
+    def _request(self, method: str, path: str, data: dict = None, timeout: int = None):
         url = self.base_url + path
         body = json.dumps(data).encode("utf-8") if data else None
         headers = {
@@ -137,7 +137,7 @@ class TtsClient:
         }
         req = urllib.request.Request(url, data=body, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            with urllib.request.urlopen(req, timeout=timeout or self.timeout) as resp:
                 raw = resp.read()
                 try:
                     return json.loads(raw), resp.status
@@ -243,6 +243,20 @@ class TtsClient:
         if code == 200:
             return r
         return {"error": r.get("error", f"HTTP {code}")}
+
+    # ── 获取说话声列表 ──────────────────────────────────
+    def list_speakers(self, timeout: int = 5) -> list[dict]:
+        """从远端 TTS 服务获取说话声列表（带超时）
+        
+        Returns:
+            list[dict]: [{"name": "aiden", "description": "..."}, ...]
+        Raises:
+            Exception: 超时或请求失败
+        """
+        r, code = self._request("GET", "/tts/speakers", timeout=timeout)
+        if code == 200:
+            return r.get("speakers", [])
+        raise Exception(f"Failed to get speakers: {r.get('error', f'HTTP {code}')}")
 
     # ── 健康检查 ──────────────────────────────────────
     def health(self) -> bool:

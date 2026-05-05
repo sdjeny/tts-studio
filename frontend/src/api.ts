@@ -91,6 +91,11 @@ export interface TtsDefaults {
   voice_id: string;          // 默认音色，可选: aiden/dylan/eric/ono_anna/ryan/serena/sohee/uncle_fu/vivian
 }
 
+export interface VoiceInfo {
+  name: string;
+  description: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -106,6 +111,9 @@ export interface Project {
 export const api = {
   // health
   health: () => request<{ status: string }>("/health"),
+
+  // voices
+  listVoices: () => request<{ voices: Array<{ name: string; description: string }> }>("/voices"),
 
   // projects
   listProjects: () => request<Project[]>("/projects"),
