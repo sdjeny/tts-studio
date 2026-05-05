@@ -1590,6 +1590,23 @@ async def api_generate_dialogues(project_id: str, episode_id: str, body: Dialogu
                 if _re.sub(r'[\s，。、；：！？""''（）【】《》\-·—_]', '', c["name"]) == norm:
                     char_id = c["id"]
                     break
+        # 3.5 模糊匹配兜底：互相包含 或 相似度 ≥ 0.8（防止 LLM 返回角色名有微小差异时创建重复角色）
+        if not char_id:
+            import re as _re
+            from difflib import SequenceMatcher
+            norm_clean = _re.sub(r'[\s，。、；：！？""''（）【】《》\-·—_]', '', char_name)
+            for c in proj.get("characters", []):
+                c_norm = _re.sub(r'[\s，。、；：！？""''（）【】《》\-·—_]', '', c["name"])
+                # 互相包含（如"林远" vs "林远博士"）
+                if norm_clean and c_norm and (norm_clean in c_norm or c_norm in norm_clean):
+                    char_id = c["id"]
+                    break
+                # 相似度 ≥ 0.8 且长度都不小于2（短名如"甲"不做模糊匹配）
+                if len(norm_clean) >= 2 and len(c_norm) >= 2:
+                    ratio = SequenceMatcher(None, norm_clean, c_norm).ratio()
+                    if ratio >= 0.8:
+                        char_id = c["id"]
+                        break
         # 4. 找不到 → 创建新角色（旁白/场景也走此逻辑，不特殊处理）
         if not char_id:
             from app.core.store import add_character
@@ -1605,6 +1622,42 @@ async def api_generate_dialogues(project_id: str, episode_id: str, body: Dialogu
         dlg = add_dialogue(project_id, episode_id, char_id, text, len(created), instruct)
         if dlg:
             created.append(dlg["id"])
+
+    # 事后校验：检查本次新建角色是否与已有角色重复（忽略大小写/空格/标点），合并孤儿引用
+    if new_chars:
+        import re as _re
+        # 构建已有角色名归一化集合（不含本次新建的）
+        existing_norm_map = {}  # normalized_name -> char_id
+        for c in proj.get("characters", []):
+            if c["name"] not in new_chars:
+                n = _re.sub(r'[\s，。、；：！？""''（）【】《》\-·—_]', '', c["name"]).lower()
+                if n:
+                    existing_norm_map[n] = c["id"]
+        # 检查每个新建角色是否和已有角色重复
+        chars_to_remove = []
+        id_remap = {}  # old_new_id -> existing_id
+        for nc_name in list(new_chars):
+            nc_norm = _re.sub(r'[\s，。、；：！？""''（）【】《》\-·—_]', '', nc_name).lower()
+            if nc_norm in existing_norm_map:
+                # 找到重复：将对白从新建角色ID重定向到已有角色ID
+                new_cid = new_char_cache.get(nc_name, "")
+                existing_cid = existing_norm_map[nc_norm]
+                if new_cid and existing_cid and new_cid != existing_cid:
+                    id_remap[new_cid] = existing_cid
+                chars_to_remove.append(nc_name)
+        # 执行对白重定向
+        if id_remap:
+            # 重定向：遍历本集所有对白，将孤儿ID替换
+            for ep_item in proj.get("episodes", []):
+                if ep_item.get("id") == episode_id:
+                    for d in ep_item.get("dialogues", []):
+                        if d.get("character_id") in id_remap:
+                            d["character_id"] = id_remap[d["character_id"]]
+                    break
+            # 从 proj["characters"] 中移除重复的新建角色
+            proj["characters"] = [c for c in proj["characters"] if c["name"] not in chars_to_remove]
+            # 清理 new_chars 列表
+            new_chars = [n for n in new_chars if n not in chars_to_remove]
 
     return {
         "created": len(created),
