@@ -195,7 +195,7 @@ export default function ProjectSettings({ project, onChange, onError }: Props) {
           }}
         >
           {VOICE_OPTIONS.map((v) => (
-            <option key={v} value={v}>{v}</option>
+            <option key={v.name} value={v.name}>{v.name}</option>
           ))}
         </select>
       </div>
