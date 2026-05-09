@@ -1,0 +1,14 @@
+# LLM 配置（OpenAI 协议）
+llm:
+  # API 地址，如 https://api.openai.com/v1
+  base_url: "url"
+  # API Key
+  api_key: "key"
+  # 模型名称
+  model: "model"
+  # 请求超时（秒）
+  timeout: 120
+  # 最大 token 数
+  max_tokens: 128000
+  # 温度
+  temperature: 0.7
