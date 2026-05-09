@@ -109,10 +109,10 @@ class TtsClient:
 
     @staticmethod
     def _load_base_url(config_path: str = None) -> str:
-        """从 config.yaml 读取 api.base_url"""
+        """从 config.yaml 读取 tts.base_url"""
         if config_path is None:
-            # 默认：模块文件所在目录的 config.yaml
-            config_path = Path(__file__).parent / "config.yaml"
+            # 默认：app/config.yaml（项目根目录下的 app 文件夹）
+            config_path = Path(__file__).resolve().parent.parent.parent / "config.yaml"
         else:
             config_path = Path(config_path)
 
@@ -122,9 +122,9 @@ class TtsClient:
         import yaml
         with open(config_path, "r", encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
-        url = cfg.get("api", {}).get("base_url", "")
+        url = cfg.get("tts", {}).get("base_url", "")
         if not url:
-            raise ValueError(f"config.yaml 中未配置 api.base_url: {config_path}")
+            raise ValueError(f"config.yaml 中未配置 tts.base_url: {config_path}")
         return url
 
     # ── 内部请求 ──────────────────────────────────────

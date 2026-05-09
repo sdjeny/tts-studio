@@ -12,3 +12,6 @@ llm:
   max_tokens: 128000
   # 温度
   temperature: 0.7
+
+tts:
+  base_url: "http://localhost:8420"
