@@ -1724,12 +1724,18 @@ async def api_generate_dialogues(project_id: str, episode_id: str, body: Dialogu
                         id_remap[new_cid] = existing_cid
                     chars_to_remove.append(nc_name)
             if id_remap:
-                for ep_item in proj.get("episodes", []):
-                    if ep_item.get("id") == episode_id:
-                        for d in ep_item.get("dialogues", []):
-                            if d.get("character_id") in id_remap:
-                                d["character_id"] = id_remap[d["character_id"]]
-                        break
+                async with store.atomic_update() as data:
+                    for p in data["projects"]:
+                        if p["id"] == project_id:
+                            for ep_in in p["episodes"]:
+                                if ep_in["id"] == episode_id:
+                                    for d in ep_in["dialogues"]:
+                                        if d.get("character_id") in id_remap:
+                                            d["character_id"] = id_remap[d["character_id"]]
+                                    break
+                            # 移除重复角色
+                            p["characters"] = [c for c in p["characters"] if c["name"] not in chars_to_remove]
+                            break
                 proj["characters"] = [c for c in proj["characters"] if c["name"] not in chars_to_remove]
                 new_chars = [n for n in new_chars if n not in chars_to_remove]
 
