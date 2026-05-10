@@ -133,16 +133,15 @@ async def api_update_episode(project_id: str, episode_id: str, body: EpisodeUpda
         raise HTTPException(404, "Episode not found")
     # 同步更新所有对白的 style_enabled
     if body.style_enabled is not None:
-        data = store._read()
-        for p in data["projects"]:
-            if p["id"] == project_id:
-                for ep_in in p["episodes"]:
-                    if ep_in["id"] == episode_id:
-                        for d in ep_in["dialogues"]:
-                            d["style_enabled"] = body.style_enabled
-                        store._write(data)
-                        break
-                break
+        async with store.atomic_update() as data:
+            for p in data["projects"]:
+                if p["id"] == project_id:
+                    for ep_in in p["episodes"]:
+                        if ep_in["id"] == episode_id:
+                            for d in ep_in["dialogues"]:
+                                d["style_enabled"] = body.style_enabled
+                            break
+                    break
     return ep
 
 
@@ -232,16 +231,15 @@ async def api_batch_update_dialogue_style(project_id: str, episode_id: str, body
     ep = get_episode(project_id, episode_id)
     if not ep:
         raise HTTPException(404, "Episode not found")
-    data = store._read()
-    for p in data["projects"]:
-        if p["id"] == project_id:
-            for ep_in in p["episodes"]:
-                if ep_in["id"] == episode_id:
-                    for d in ep_in["dialogues"]:
-                        d["style_enabled"] = body.style_enabled
-                    store._write(data)
-                    return {"ok": True, "updated": len(ep_in["dialogues"])}
-            break
+    async with store.atomic_update() as data:
+        for p in data["projects"]:
+            if p["id"] == project_id:
+                for ep_in in p["episodes"]:
+                    if ep_in["id"] == episode_id:
+                        for d in ep_in["dialogues"]:
+                            d["style_enabled"] = body.style_enabled
+                        return {"ok": True, "updated": len(ep_in["dialogues"])}
+                break
     raise HTTPException(404, "Episode not found")
 
 
@@ -400,52 +398,50 @@ async def _download_and_save(project_id: str, episode_id: str, dialogue_id: str,
 
         # Replace placeholder with real record
         real_id = f"audio_{uuid.uuid4().hex[:8]}"
-        data = store._read()
-        for p in data["projects"]:
-            if p["id"] == project_id:
-                for ep_in in p["episodes"]:
-                    if ep_in["id"] == episode_id:
-                        for d in ep_in["dialogues"]:
-                            if d["id"] == dialogue_id:
-                                d["audio_history"] = [
-                                    a for a in d["audio_history"]
-                                    if a.get("id") != placeholder_id
-                                ]
-                                d["audio_history"].append({
-                                    "id": real_id,
-                                    "url": audio_url,
-                                    "filename": filename,
-                                    "created_at": _now(),
-                                    "raw": is_raw,
-                                    "duration": _audio_duration(str(filepath)),
-                                })
-                                d["current_audio_id"] = real_id
-                                d["status"] = "completed"
-                                store._write(data)
-                                return
-                        break
-                break
+        async with store.atomic_update() as data:
+            for p in data["projects"]:
+                if p["id"] == project_id:
+                    for ep_in in p["episodes"]:
+                        if ep_in["id"] == episode_id:
+                            for d in ep_in["dialogues"]:
+                                if d["id"] == dialogue_id:
+                                    d["audio_history"] = [
+                                        a for a in d["audio_history"]
+                                        if a.get("id") != placeholder_id
+                                    ]
+                                    d["audio_history"].append({
+                                        "id": real_id,
+                                        "url": audio_url,
+                                        "filename": filename,
+                                        "created_at": _now(),
+                                        "raw": is_raw,
+                                        "duration": _audio_duration(str(filepath)),
+                                    })
+                                    d["current_audio_id"] = real_id
+                                    d["status"] = "completed"
+                                    return
+                            break
+                    break
     except Exception as e:
         # 系统端异常（超时/网络/下载失败）→ 保持 generating 状态，等用户刷新重试
         # 只有 TTS 服务器明确返回 failed 才算真正失败（在 check_tts_status 里判断）
-        data = store._read()
-        for p in data["projects"]:
-            if p["id"] == project_id:
-                for ep_in in p["episodes"]:
-                    if ep_in["id"] == episode_id:
-                        for d in ep_in["dialogues"]:
-                            if d["id"] == dialogue_id:
-                                # 更新占位记录：保留 task_id，标记 interrupted 便于前端提示
-                                for a in d["audio_history"]:
-                                    if a.get("id") == placeholder_id:
-                                        a["interrupted"] = True
-                                        a["error"] = str(e)
-                                        break
-                                d["status"] = "generating"
-                                store._write(data)
-                                return
-                        break
-                break
+        async with store.atomic_update() as data:
+            for p in data["projects"]:
+                if p["id"] == project_id:
+                    for ep_in in p["episodes"]:
+                        if ep_in["id"] == episode_id:
+                            for d in ep_in["dialogues"]:
+                                if d["id"] == dialogue_id:
+                                    # 更新占位记录：保留 task_id，标记 interrupted 便于前端提示
+                                    for a in d["audio_history"]:
+                                        if a.get("id") == placeholder_id:
+                                            a["interrupted"] = True
+                                            a["error"] = str(e)
+                                            break
+                                    d["status"] = "generating"
+                                    return
+                            break
+                    break
 
 
 @router.post("/projects/{project_id}/episodes/{episode_id}/dialogues/{dialogue_id}/generate")
@@ -474,7 +470,32 @@ async def api_generate_audio(project_id: str, episode_id: str, dialogue_id: str)
     except Exception as e:
         # Submit 失败（网络/TTS服务不可用）→ 写 interrupted 占位，等刷新时重新提交
         interrupt_id = f"gen_{uuid.uuid4().hex[:8]}"
-        data = store._read()
+        async with store.atomic_update() as data:
+            for p in data["projects"]:
+                if p["id"] == project_id:
+                    for ep_in in p["episodes"]:
+                        if ep_in["id"] == episode_id:
+                            for d in ep_in["dialogues"]:
+                                if d["id"] == dialogue_id:
+                                    d["audio_history"].append({
+                                        "id": interrupt_id,
+                                        "url": "",
+                                        "filename": "",
+                                        "created_at": _now(),
+                                        "status": "generating",
+                                        "interrupted": True,
+                                        "error": str(e),
+                                    })
+                                    d["current_audio_id"] = interrupt_id
+                                    d["status"] = "generating"
+                                    return d
+                            break
+                    break
+        raise HTTPException(504, f"TTS服务不可用: {e}")
+
+    # Write placeholder with task_id, return immediately
+    placeholder_id = f"gen_{uuid.uuid4().hex[:8]}"
+    async with store.atomic_update() as data:
         for p in data["projects"]:
             if p["id"] == project_id:
                 for ep_in in p["episodes"]:
@@ -482,45 +503,18 @@ async def api_generate_audio(project_id: str, episode_id: str, dialogue_id: str)
                         for d in ep_in["dialogues"]:
                             if d["id"] == dialogue_id:
                                 d["audio_history"].append({
-                                    "id": interrupt_id,
+                                    "id": placeholder_id,
                                     "url": "",
                                     "filename": "",
                                     "created_at": _now(),
                                     "status": "generating",
-                                    "interrupted": True,
-                                    "error": str(e),
+                                    "task_id": task_id,
                                 })
-                                d["current_audio_id"] = interrupt_id
+                                d["current_audio_id"] = placeholder_id
                                 d["status"] = "generating"
-                                store._write(data)
-                                return d
+                                break
                         break
                 break
-        raise HTTPException(504, f"TTS服务不可用: {e}")
-
-    # Write placeholder with task_id, return immediately
-    placeholder_id = f"gen_{uuid.uuid4().hex[:8]}"
-    data = store._read()
-    for p in data["projects"]:
-        if p["id"] == project_id:
-            for ep_in in p["episodes"]:
-                if ep_in["id"] == episode_id:
-                    for d in ep_in["dialogues"]:
-                        if d["id"] == dialogue_id:
-                            d["audio_history"].append({
-                                "id": placeholder_id,
-                                "url": "",
-                                "filename": "",
-                                "created_at": _now(),
-                                "status": "generating",
-                                "task_id": task_id,
-                            })
-                            d["current_audio_id"] = placeholder_id
-                            d["status"] = "generating"
-                            store._write(data)
-                            break
-                    break
-            break
 
     # Kick off background download
     asyncio.create_task(
@@ -599,25 +593,24 @@ async def api_batch_refresh_dialogues(project_id: str, episode_id: str, body: Ba
 
 async def _refresh_single_dialogue(project_id: str, episode_id: str, dlg: dict):
     """刷新单条对白状态的核心逻辑（从 api_refresh_dialogue 提取）。"""
-    def _replace_placeholder(placeholder, real_record):
-        data = store._read()
-        for p in data["projects"]:
-            if p["id"] == project_id:
-                for ep_in in p["episodes"]:
-                    if ep_in["id"] == episode_id:
-                        for d in ep_in["dialogues"]:
-                            if d["id"] == dlg["id"]:
-                                d["audio_history"] = [
-                                    a for a in d["audio_history"]
-                                    if a.get("id") != placeholder["id"]
-                                ]
-                                d["audio_history"].append(real_record)
-                                d["current_audio_id"] = real_record["id"]
-                                d["status"] = "completed"
-                                store._write(data)
-                                return
-                        break
-                break
+    async def _replace_placeholder(placeholder, real_record):
+        async with store.atomic_update() as data:
+            for p in data["projects"]:
+                if p["id"] == project_id:
+                    for ep_in in p["episodes"]:
+                        if ep_in["id"] == episode_id:
+                            for d in ep_in["dialogues"]:
+                                if d["id"] == dlg["id"]:
+                                    d["audio_history"] = [
+                                        a for a in d["audio_history"]
+                                        if a.get("id") != placeholder["id"]
+                                    ]
+                                    d["audio_history"].append(real_record)
+                                    d["current_audio_id"] = real_record["id"]
+                                    d["status"] = "completed"
+                                    return
+                            break
+                    break
 
     async def _try_download_audio(task_id, placeholder):
         try:
@@ -625,31 +618,30 @@ async def _refresh_single_dialogue(project_id: str, episode_id: str, dlg: dict):
             if result["status"] in ("pending", "processing"):
                 return False
             if result["status"] == "failed":
-                data = store._read()
-                for p in data["projects"]:
-                    if p["id"] == project_id:
-                        for ep_in in p["episodes"]:
-                            if ep_in["id"] == episode_id:
-                                for d in ep_in["dialogues"]:
-                                    if d["id"] == dlg["id"]:
-                                        d["audio_history"] = [
-                                            a for a in d["audio_history"]
-                                            if a.get("id") != placeholder["id"]
-                                        ]
-                                        d["audio_history"].append({
-                                            "id": f"failed_{uuid.uuid4().hex[:8]}",
-                                            "url": "",
-                                            "filename": "",
-                                            "created_at": _now(),
-                                            "status": "failed",
-                                            "error": result["error"] or "TTS 任务失败",
-                                        })
-                                        d["status"] = "failed"
-                                        store._write(data)
-                                        return True
-                                break
-                        break
-                return True
+                async with store.atomic_update() as data:
+                    for p in data["projects"]:
+                        if p["id"] == project_id:
+                            for ep_in in p["episodes"]:
+                                if ep_in["id"] == episode_id:
+                                    for d in ep_in["dialogues"]:
+                                        if d["id"] == dlg["id"]:
+                                            d["audio_history"] = [
+                                                a for a in d["audio_history"]
+                                                if a.get("id") != placeholder["id"]
+                                            ]
+                                            d["audio_history"].append({
+                                                "id": f"failed_{uuid.uuid4().hex[:8]}",
+                                                "url": "",
+                                                "filename": "",
+                                                "created_at": _now(),
+                                                "status": "failed",
+                                                "error": result["error"] or "TTS 任务失败",
+                                            })
+                                            d["status"] = "failed"
+                                            return True
+                                    break
+                            break
+                    return True
             client = get_client()
             loop = asyncio.get_event_loop()
             dl_result = await loop.run_in_executor(None, lambda: client.download(task_id))
@@ -660,7 +652,7 @@ async def _refresh_single_dialogue(project_id: str, episode_id: str, dlg: dict):
             with open(filepath, "wb") as f:
                 f.write(dl_result.data)
             real_id = f"audio_{uuid.uuid4().hex[:8]}"
-            _replace_placeholder(placeholder, {
+            await _replace_placeholder(placeholder, {
                 "id": real_id,
                 "url": f"/static/audio/{filename}",
                 "filename": filename,
@@ -691,23 +683,22 @@ async def _refresh_single_dialogue(project_id: str, episode_id: str, dlg: dict):
                     continue
                 tts_kwargs = _resolve_dialogue_tts_params(project_id, dlg, _proj)
                 new_task_id = await submit_tts(**tts_kwargs)
-                data = store._read()
-                for p in data["projects"]:
-                    if p["id"] == project_id:
-                        for ep_in in p["episodes"]:
-                            if ep_in["id"] == episode_id:
-                                for d in ep_in["dialogues"]:
-                                    if d["id"] == dlg["id"]:
-                                        for a in d["audio_history"]:
-                                            if a.get("id") == ah["id"]:
-                                                a["task_id"] = new_task_id
-                                                a["interrupted"] = False
-                                                a["error"] = ""
-                                                break
-                                        store._write(data)
-                                        break
-                                break
-                        break
+                async with store.atomic_update() as data:
+                    for p in data["projects"]:
+                        if p["id"] == project_id:
+                            for ep_in in p["episodes"]:
+                                if ep_in["id"] == episode_id:
+                                    for d in ep_in["dialogues"]:
+                                        if d["id"] == dlg["id"]:
+                                            for a in d["audio_history"]:
+                                                if a.get("id") == ah["id"]:
+                                                    a["task_id"] = new_task_id
+                                                    a["interrupted"] = False
+                                                    a["error"] = ""
+                                                    break
+                                            break
+                                    break
+                            break
             except Exception:
                 pass
 
@@ -722,17 +713,17 @@ async def _refresh_single_dialogue(project_id: str, episode_id: str, dlg: dict):
             ah["interrupted"] = True
             ah["error"] = "文件丢失，等待重试"
 
-    data = store._read()
-    for p in data["projects"]:
-        if p["id"] == project_id:
-            for ep_in in p["episodes"]:
-                if ep_in["id"] == episode_id:
-                    for d in ep_in["dialogues"]:
-                        if d["id"] == dlg["id"]:
-                            store._write(data)
-                            return
-                    break
-            break
+    async with store.atomic_update() as data:
+        for p in data["projects"]:
+            if p["id"] == project_id:
+                for ep_in in p["episodes"]:
+                    if ep_in["id"] == episode_id:
+                        for d in ep_in["dialogues"]:
+                            if d["id"] == dlg["id"]:
+                                d["audio_history"] = dlg["audio_history"]
+                                return
+                        break
+                break
 
 
 @router.post("/projects/{project_id}/episodes/{episode_id}/generate-batch")
@@ -765,6 +756,62 @@ async def api_generate_batch_audio(project_id: str, episode_id: str, body: Batch
                     if d["id"] == dlg_id:
                         dlg = d
                         break
+
+                if not dlg:
+                    msg = _json.dumps({"index": i, "total": total, "dialogue_id": dlg_id, "status": "error", "error": "对白不存在"}, ensure_ascii=False)
+                    yield f"data: {msg}\n\n"
+                    failed_list.append(dlg_id)
+                    continue
+
+                try:
+                    # 统一解析 TTS 参数（与单条路径共用同一函数，确保行为一致）
+                    tts_kwargs = _resolve_dialogue_tts_params(project_id, dlg, proj)
+                    task_id_inner = await submit_tts(**tts_kwargs)
+                    submitted += 1
+
+                    # 写回 store：创建占位记录
+                    placeholder_id = f"gen_{uuid.uuid4().hex[:8]}"
+                    async with store.atomic_update() as data:
+                        for p in data["projects"]:
+                            if p["id"] == project_id:
+                                for ep_in in p["episodes"]:
+                                    if ep_in["id"] == episode_id:
+                                        for d in ep_in["dialogues"]:
+                                            if d["id"] == dlg_id:
+                                                d["audio_history"].append({
+                                                    "id": placeholder_id,
+                                                    "url": "",
+                                                    "filename": "",
+                                                    "created_at": _now(),
+                                                    "status": "generating",
+                                                    "task_id": task_id_inner,
+                                                })
+                                                d["current_audio_id"] = placeholder_id
+                                                d["status"] = "generating"
+                                        break
+                                break
+
+                    # 启动后台下载（不等完成）
+                    asyncio.create_task(
+                        _download_and_save(project_id, episode_id, dlg_id, task_id_inner, placeholder_id)
+                    )
+
+                    update_generation_task(project_id, task_id, current=submitted + len(failed_list))
+                    msg = _json.dumps({"index": i, "total": total, "dialogue_id": dlg_id, "status": "submitted", "task_id": task_id_inner}, ensure_ascii=False)
+                    yield f"data: {msg}\n\n"
+
+                except Exception as e:
+                    msg = _json.dumps({"index": i, "total": total, "dialogue_id": dlg_id, "status": "error", "error": str(e)}, ensure_ascii=False)
+                    yield f"data: {msg}\n\n"
+                    failed_list.append(dlg_id)
+
+            update_generation_task(project_id, task_id, status="complete", current=submitted + len(failed_list))
+            # 发送汇总
+            summary = _json.dumps({"status": "done", "total": total, "submitted": submitted, "failed_count": len(failed_list)}, ensure_ascii=False)
+            yield f"data: {summary}\n\n"
+        except Exception as e:
+            update_generation_task(project_id, task_id, status="error", error=str(e))
+            raise
 
                 if not dlg:
                     msg = _json.dumps({"index": i, "total": total, "dialogue_id": dlg_id, "status": "error", "error": "对白不存在"}, ensure_ascii=False)
@@ -1073,27 +1120,26 @@ async def api_apply_effects(project_id: str, episode_id: str, dialogue_id: str):
     # 添加新历史记录并起效
     new_id = f"audio_{uuid.uuid4().hex[:8]}"
     audio_url = f"/static/audio/{new_filename}"
-    data = store._read()
-    for p in data["projects"]:
-        if p["id"] == project_id:
-            for ep_in in p["episodes"]:
-                if ep_in["id"] == episode_id:
-                    for d in ep_in["dialogues"]:
-                        if d["id"] == dialogue_id:
-                            d["audio_history"].append({
-                                "id": new_id,
-                                "url": audio_url,
-                                "filename": new_filename,
-                                "created_at": _now(),
-                                "raw": False,
-                                "duration": _audio_duration(str(new_filepath)),
-                            })
-                            d["current_audio_id"] = new_id
-                            d["status"] = "completed"
-                            store._write(data)
-                            return get_episode(project_id, episode_id)
-                    break
-            break
+    async with store.atomic_update() as data:
+        for p in data["projects"]:
+            if p["id"] == project_id:
+                for ep_in in p["episodes"]:
+                    if ep_in["id"] == episode_id:
+                        for d in ep_in["dialogues"]:
+                            if d["id"] == dialogue_id:
+                                d["audio_history"].append({
+                                    "id": new_id,
+                                    "url": audio_url,
+                                    "filename": new_filename,
+                                    "created_at": _now(),
+                                    "raw": False,
+                                    "duration": _audio_duration(str(new_filepath)),
+                                })
+                                d["current_audio_id"] = new_id
+                                d["status"] = "completed"
+                                return get_episode(project_id, episode_id)
+                        break
+                break
 
     raise HTTPException(500, "更新数据失败")
 
@@ -1886,13 +1932,12 @@ async def api_batch_replace_character(project_id: str, body: BatchReplaceCharReq
                 affected_eps.add(ep["id"])
 
     # 持久化
-    data = store._read()
-    for p in data["projects"]:
-        if p["id"] == project_id:
-            p["episodes"] = proj["episodes"]
-            p["characters"] = proj["characters"]
-            break
-    store._write(data)
+    async with store.atomic_update() as data:
+        for p in data["projects"]:
+            if p["id"] == project_id:
+                p["episodes"] = proj["episodes"]
+                p["characters"] = proj["characters"]
+                break
 
     return {
         "replaced": replaced,

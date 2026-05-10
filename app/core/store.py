@@ -4,8 +4,10 @@ import uuid
 import time
 import os
 import copy
+import asyncio
 from pathlib import Path
 from typing import Any
+from contextlib import asynccontextmanager
 
 import yaml as _yaml
 
@@ -38,6 +40,9 @@ def _load_tts_defaults() -> dict:
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 DATA_FILE = DATA_DIR / "studio.json"
 
+# Module-level write lock for read-modify-write atomicity
+_store_lock = asyncio.Lock()
+
 
 def _ensure_data_dir():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -50,7 +55,7 @@ def _read() -> dict:
     if not DATA_FILE.exists():
         _write({"projects": []})
     with open(DATA_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+        return copy.deepcopy(json.load(f))  # deep copy to prevent accidental sharing
 
 
 def _write(data: dict):
@@ -71,6 +76,26 @@ def _write(data: dict):
         os.remove(tmp)
     except OSError:
         pass
+
+@asynccontextmanager
+async def atomic_update():
+    """
+    Atomic update context manager for read-modify-write operations.
+
+    Usage:
+        async with atomic_update() as data:
+            # modify data (deep copy from _read())
+            ...
+        # auto _write(data) on success
+    """
+    async with _store_lock:
+        data = _read()
+        try:
+            yield data
+        except Exception:
+            raise
+        else:
+            _write(data)
 
 
 def _now() -> str:
