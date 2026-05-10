@@ -43,3 +43,75 @@ def trigger_reload():
     time.sleep(0.5)
     main_py = Path(__file__).resolve().parent.parent.parent / "main.py"
     main_py.touch()
+
+
+# 敏感字段名（匹配时做脱敏）
+_SENSITIVE_KEYS = {"api_key", "secret_key", "token", "password"}
+
+
+def _sanitize_value(key: str, value):
+    """对敏感字段值做脱敏。"""
+    if isinstance(value, str) and any(sk in key.lower() for sk in _SENSITIVE_KEYS):
+        return mask_api_key(value)
+    return value
+
+
+def _sanitize_dict(d: dict) -> dict:
+    """递归脱敏字典中的敏感字段。"""
+    result = {}
+    for k, v in d.items():
+        if isinstance(v, dict):
+            result[k] = _sanitize_dict(v)
+        else:
+            result[k] = _sanitize_value(k, v)
+    return result
+
+
+def _deep_update(base: dict, update: dict) -> dict:
+    """递归合并 update 到 base（只更新提供的键）。"""
+    for k, v in update.items():
+        if k in base and isinstance(base[k], dict) and isinstance(v, dict):
+            _deep_update(base[k], v)
+        else:
+            base[k] = v
+    return base
+
+
+class ConfigManager:
+    """配置管理器 — 封装读取、脱敏、更新操作。"""
+
+    def get_sanitized_config(self) -> dict:
+        """返回脱敏后的配置（敏感字段用 **** 掩盖）。"""
+        cfg = load_config()
+        return _sanitize_dict(cfg)
+
+    def update_config(self, data: dict) -> dict:
+        """部分更新配置并持久化，返回更新后的完整脱敏配置。
+
+        - 跳过值为脱敏标记的字段（is_masked_key）。
+        - 写入后触发 uvicorn 热更新。
+        """
+        cfg = load_config()
+
+        # 过滤掉脱敏后的占位值，避免覆盖真实 key
+        clean = _strip_masked(data)
+        _deep_update(cfg, clean)
+        save_config(cfg)
+        trigger_reload()
+        return _sanitize_dict(cfg)
+
+
+def _strip_masked(d: dict) -> dict:
+    """递归移除值为脱敏标记的字段，避免误覆盖。"""
+    result = {}
+    for k, v in d.items():
+        if isinstance(v, dict):
+            result[k] = _strip_masked(v)
+        elif isinstance(v, str) and is_masked_key(v):
+            continue  # 跳过脱敏值
+        else:
+            result[k] = v
+    return result
+
+
+config_manager = ConfigManager()
