@@ -1600,24 +1600,29 @@ async def api_generate_dialogues(project_id: str, episode_id: str, body: Dialogu
                     if _re.sub(r'[\s，。、；：！？""''（）【】《》\-·—_]', '', c["name"]) == norm:
                         char_id = c["id"]
                         break
-            # 3.5 模糊匹配兜底：互相包含 或 编辑距离 ≤ 2
+            # 3.5 模糊匹配兜底：互相包含 或 SequenceMatcher 相似度 >= 0.7
             if not char_id:
                 import re as _re
+                from difflib import SequenceMatcher
                 norm_clean = _re.sub(r'[\s，。、；：！？""''（）【】《》\-·—_]', '', char_name)
                 for c in proj.get("characters", []):
                     c_norm = _re.sub(r'[\s，。、；：！？""''（）【】《》\-·—_]', '', c["name"])
                     if norm_clean and c_norm and (norm_clean in c_norm or c_norm in norm_clean):
                         char_id = c["id"]
                         break
-                if not char_id and len(norm_clean) <= 10:
+                if not char_id:
+                    best_ratio = 0.0
+                    best_char_id = ""
                     for c in proj.get("characters", []):
                         c_norm = _re.sub(r'[\s，。、；：！？""''（）【】《》\-·—_]', '', c["name"])
-                        if abs(len(norm_clean) - len(c_norm)) <= 2:
-                            dist = sum(1 for a, b in zip(norm_clean, c_norm) if a != b)
-                            dist += abs(len(norm_clean) - len(c_norm))
-                            if dist <= 2:
-                                char_id = c["id"]
-                                break
+                        if not c_norm or not norm_clean:
+                            continue
+                        ratio = SequenceMatcher(None, norm_clean, c_norm).ratio()
+                        if ratio > best_ratio:
+                            best_ratio = ratio
+                            best_char_id = c["id"]
+                    if best_ratio >= 0.7 and best_char_id:
+                        char_id = best_char_id
             # 4. 找不到 → 创建新角色
             if not char_id:
                 from app.core.store import add_character
