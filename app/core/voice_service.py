@@ -7,6 +7,7 @@ from pathlib import Path
 import httpx
 
 _CACHE_PATH = Path("data/voice_cache.json")
+_CACHE_TTL = 86400  # 24 hours (seconds)
 
 from app.core.speakers import _get_fallback_speakers as _FALLBACK_SPEAKERS_FN
 
@@ -65,6 +66,10 @@ def _load_cache() -> list[dict] | None:
     try:
         if _CACHE_PATH.exists():
             data = json.loads(_CACHE_PATH.read_text())
+            # TTL check: cache older than 24 hours is considered stale
+            updated_at = data.get("updated_at", 0)
+            if updated_at and (int(time.time()) - updated_at) > _CACHE_TTL:
+                return None
             return data.get("speakers")
     except Exception:
         pass
