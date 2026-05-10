@@ -716,3 +716,77 @@ def restore_snapshot(project_id: str, episode_id: str, version: int) -> dict | N
     if _update_timeline_field(project_id, episode_id, updater):
         return result[0]
     return None
+# ─── Generation Task Status ───────────────────────────────
+
+def _ensure_generation_tasks(data: dict) -> bool:
+    """Ensure generation_tasks field exists in project. Returns True if added."""
+    dirty = False
+    for p in data.get("projects", []):
+        if "generation_tasks" not in p:
+            p["generation_tasks"] = {}
+            dirty = True
+    if dirty:
+        _write(data)
+    return dirty
+
+
+def init_generation_task(project_id: str, episode_id: str, task_type: str,
+                         total: int = 0) -> str:
+    """Initialize a generation task, return task_id."""
+    task_id = f"gen_task_{uuid.uuid4().hex[:8]}"
+    data = _read()
+    _ensure_generation_tasks(data)
+    for p in data["projects"]:
+        if p["id"] == project_id:
+            p["generation_tasks"][task_id] = {
+                "id": task_id,
+                "episode_id": episode_id,
+                "type": task_type,
+                "status": "running",
+                "current": 0,
+                "total": total,
+                "created_at": _now(),
+                "updated_at": _now(),
+                "error": None,
+            }
+            break
+    _write(data)
+    return task_id
+
+
+def update_generation_task(project_id: str, task_id: str, **fields) -> bool:
+    """Update generation task fields."""
+    data = _read()
+    for p in data["projects"]:
+        if p["id"] == project_id:
+            if task_id in p.get("generation_tasks", {}):
+                p["generation_tasks"][task_id].update(fields)
+                p["generation_tasks"][task_id]["updated_at"] = _now()
+                _write(data)
+                return True
+    return False
+
+
+def get_generation_task(project_id: str, episode_id: str = None,
+                        task_type: str = None) -> dict | None:
+    """Get the most recent active generation task for an episode."""
+    data = _read()
+    for p in data["projects"]:
+        if p["id"] == project_id:
+            tasks = p.get("generation_tasks", {})
+            candidates = []
+            for tid, t in tasks.items():
+                if episode_id and t.get("episode_id") != episode_id:
+                    continue
+                if task_type and t.get("type") != task_type:
+                    continue
+                candidates.append(t)
+            if not candidates:
+                return None
+            running = [t for t in candidates if t.get("status") == "running"]
+            if running:
+                running.sort(key=lambda t: t.get("updated_at", ""), reverse=True)
+                return running[0]
+            candidates.sort(key=lambda t: t.get("updated_at", ""), reverse=True)
+            return candidates[0]
+    return None
