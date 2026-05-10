@@ -362,6 +362,14 @@ export const api = {
       { method: "POST" }
     ),
 
+  // config
+  getConfig: () => request<Record<string, any>>("/config"),
+  updateConfig: (data: Record<string, any>) =>
+    request<Record<string, any>>("/config", {
+      method: "PATCH",
+      body: JSON.stringify({ data }),
+    }),
+
   // audio effects
   getEffectsRegistry: () => request<EffectRegistryItem[]>("/audio-effects/registry"),
   getEffectsPresets: () => request<Record<string, EffectPreset>>("/audio-effects/presets"),
