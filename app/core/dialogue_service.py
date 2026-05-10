@@ -1,0 +1,369 @@
+"""对白生成服务 — 从 LLM 生成幕结构并展开对白。"""
+
+import json
+import sys
+import re as _re
+from difflib import SequenceMatcher
+
+from app.core.llm import chat_json, get_llm_config
+from app.core.store import (
+    get_project, get_episode, add_dialogue, add_character,
+)
+
+# TTS 服务支持的音色列表（与 episodes.py 中 _VALID_VOICES 保持一致）
+_VALID_VOICES = {"aiden", "dylan", "eric", "ono_anna", "ryan", "serena", "sohee", "uncle_fu", "vivian"}
+
+
+def _safe_voice_id(voice_id: str) -> str:
+    return voice_id if voice_id in _VALID_VOICES else "aiden"
+
+
+def _build_chars_info(proj: dict, detailed: bool = False) -> list[str]:
+    """构建角色信息列表（仅真实角色）。"""
+    chars = list(proj.get("characters", []))
+    result = []
+    for c in chars:
+        if detailed:
+            base_instruct = c.get("base_instruct", "")
+            desc = c.get("description", "无")
+            result.append(
+                f"- {c['name']} (voice: {c.get('voice_id', '默认')}, "
+                f"基础风格: {base_instruct or '无'}, "
+                f"性格/描述: {desc})"
+            )
+        else:
+            result.append(
+                f"- {c['name']} (voice: {c.get('voice_id', '默认')}, "
+                f"描述: {c.get('description', '无')})"
+            )
+    return result
+
+
+class DialogueGenerator:
+    """将 api_generate_dialogues 中的 _generate() 逻辑抽取为独立服务。"""
+
+    def __init__(self, project_id: str, episode_id: str, body):
+        self.project_id = project_id
+        self.episode_id = episode_id
+        self.body = body
+        self.proj = get_project(project_id)
+        self.ep = get_episode(project_id, episode_id)
+
+    def _build_chars_info(self, detailed: bool = False) -> list[str]:
+        return _build_chars_info(self.proj, detailed)
+
+    def _resolve_char_id(self, char_name: str, new_char_cache: dict) -> tuple:
+        """
+        角色名 → char_id 解析。
+        优先级：精确匹配 → 本次已创建 → 归一化匹配 → 互相包含 → 模糊匹配(SequenceMatcher) → 创建新角色
+        返回 (char_id, is_new)。
+        """
+        proj = self.proj
+        # 1. 精确匹配已有角色
+        for c in proj.get("characters", []):
+            if c["name"].strip() == char_name:
+                return c["id"], False
+        # 2. 本次已创建
+        if char_name in new_char_cache:
+            return new_char_cache[char_name], False
+        # 3. 归一化匹配
+        norm = _re.sub(r'[\s，。、；：！？""''（）【】《》\-·—_]', '', char_name)
+        for c in proj.get("characters", []):
+            c_norm = _re.sub(r'[\s，。、；：！？""''（）【】《》\-·—_]', '', c["name"])
+            if c_norm == norm:
+                return c["id"], False
+        # 3.5 互相包含
+        for c in proj.get("characters", []):
+            c_norm = _re.sub(r'[\s，。、；：！？""''（）【】《》\-·—_]', '', c["name"])
+            if norm and c_norm and (norm in c_norm or c_norm in norm):
+                return c["id"], False
+        # 3.6 模糊匹配 (SequenceMatcher)
+        best_ratio = 0.0
+        best_cid = ""
+        for c in proj.get("characters", []):
+            c_norm = _re.sub(r'[\s，。、；：！？""''（）【】《》\-·—_]', '', c["name"])
+            if not c_norm or not norm:
+                continue
+            ratio = SequenceMatcher(None, norm, c_norm).ratio()
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_cid = c["id"]
+        if best_ratio >= 0.7 and best_cid:
+            return best_cid, False
+        # 4. 创建新角色
+        existing_voices = [_safe_voice_id(c.get("voice_id", "")) for c in proj.get("characters", [])]
+        voice_id = existing_voices[0] if existing_voices else "aiden"
+        new_char = add_character(
+            self.project_id, char_name, voice_id,
+            description=f"AI 自动生成角色: {char_name}"
+        )
+        if new_char:
+            new_char_cache[char_name] = new_char["id"]
+            proj["characters"].append(new_char)
+            return new_char["id"], True
+        return "", False
+
+    async def generate(self):
+        """
+        异步生成器，yield (event_type, data) 元组。
+        与原 _generate() 逻辑一致。
+        """
+        proj = self.proj
+        if not proj:
+            yield "error", {"message": "Project not found"}
+            return
+
+        ep = self.ep
+        if not ep:
+            yield "error", {"message": "Episode not found"}
+            return
+
+        body = self.body
+
+        llm_cfg = get_llm_config()
+        if not llm_cfg.get("base_url") or not llm_cfg.get("api_key"):
+            yield "error", {"message": "LLM 未配置，请先填写 app/config.yaml 中的 llm.base_url 和 llm.api_key"}
+            return
+
+        episode_summary = ep.get("summary", "")
+        if not episode_summary:
+            yield "error", {"message": "该剧集没有摘要，请先生成或填写摘要"}
+            return
+
+        chars_info = self._build_chars_info(detailed=True)
+
+        # 前情提要
+        prev_summaries = []
+        for prev_ep in proj.get("episodes", []):
+            if prev_ep["id"] == self.episode_id:
+                break
+            if prev_ep.get("summary"):
+                prev_summaries.append(f"《{prev_ep['title']}》: {prev_ep['summary']}")
+
+        # 本集在整体故事中的位置
+        all_eps = proj.get("episodes", [])
+        ep_index = next((i for i, e in enumerate(all_eps) if e["id"] == self.episode_id), 0)
+        total_eps = len(all_eps)
+        if total_eps > 1:
+            if ep_index == 0:
+                position_hint = "这是第一集，需要建立角色关系和故事背景。"
+            elif ep_index == total_eps - 1:
+                position_hint = "这是最后一集，需要收束所有线索，给出结局。"
+            elif ep_index < total_eps // 3:
+                position_hint = "故事处于铺垫阶段，角色关系正在建立。"
+            elif ep_index < total_eps * 2 // 3:
+                position_hint = "故事处于发展阶段，冲突正在升级。"
+            else:
+                position_hint = "故事接近高潮，矛盾即将爆发。"
+        else:
+            position_hint = "这是唯一一集，需要在有限空间内讲完整个故事。"
+
+        # ── 阶段 1：规划幕结构 ──
+        target_total = max(10, body.target_duration_min * 60 // 4)
+        num_scenes = max(3, min(8, target_total // 40))
+
+        plan_system = (
+            f"你是一个有声故事编剧。根据给定摘要，将故事划分为若干幕（scene），输出 JSON。\n\n"
+            f'输出格式：\n{{"scenes":[{{"summary":"本幕概述（50字内）","type":"narration|dialogue|mixed","lines":条数}}, ...]}}\n\n'
+            f"要求：\n"
+            f"- 共 {num_scenes} 幕，每幕有明确的叙事功能（铺垫/冲突/转折/高潮/收尾等）\n"
+            f"- 总条数约 {target_total} 条，旁白比例约 {body.narration_ratio}%\n"
+            f"- type 说明：narration=旁白为主，dialogue=对话为主，mixed=混合\n"
+            f"- 各幕条数之和必须等于 {target_total}\n"
+            f"- 角色的行为、对话风格、情感反应必须符合其性格特征和基础风格"
+        )
+
+        plan_user = f"标题：{ep['title']}\n摘要：{episode_summary}\n"
+        if chars_info:
+            plan_user += "角色信息（性格+朗读风格，角色行为需符合其性格）：\n"
+            for c in chars_info:
+                plan_user += f"  {c}\n"
+        if prev_summaries:
+            plan_user += f"前情：{'；'.join(s[:60] for s in prev_summaries)}\n"
+        if body.instruction:
+            plan_user += f"额外要求：{body.instruction}\n"
+        plan_user += f"请将这个故事划分为 {num_scenes} 幕，输出 JSON。"
+
+        yield "planning", {"scenes": num_scenes, "total": target_total}
+
+        try:
+            plan_result = chat_json([
+                {"role": "system", "content": plan_system},
+                {"role": "user", "content": plan_user},
+            ], max_tokens=4000, timeout=300)
+        except Exception as e:
+            yield "error", {"message": f"LLM 幕规划失败: {e}"}
+            return
+
+        scenes_plan = plan_result.get("scenes", [])
+        sys.stderr.write(f"  [PLAN] scenes={len(scenes_plan)}, data={json.dumps(plan_result, ensure_ascii=False)[:300]}\n")
+        sys.stderr.flush()
+        if not scenes_plan:
+            yield "error", {"message": "LLM 未返回幕结构"}
+            return
+
+        # ── 阶段 2：逐幕展开生成对白 ──
+        all_dialogues_data: list[dict] = []
+        completed_scenes_summary: list[str] = []
+        total_created = 0
+
+        for scene_i, scene in enumerate(scenes_plan):
+            scene_summary = scene.get("summary", f"第{scene_i + 1}幕")
+            scene_type = scene.get("type", "mixed")
+            scene_lines = scene.get("lines", 40)
+            scene_narr = int(scene_lines * body.narration_ratio / 100)
+            scene_dialog = scene_lines - scene_narr
+
+            yield "scene_start", {"index": scene_i, "summary": scene_summary}
+
+            context_tail = ""
+            if completed_scenes_summary:
+                context_tail = "\n\n【前情提要】:\n" + "\n".join(
+                    f"幕{i + 1}: {s}" for i, s in enumerate(completed_scenes_summary)
+                )
+
+            scene_collected: list[dict] = []
+            existing_scene_lines: list[str] = []
+
+            while len(scene_collected) < scene_lines:
+                still_need = min(20, scene_lines - len(scene_collected))
+
+                existing_hint = ""
+                if existing_scene_lines:
+                    existing_hint = "\n\n【本幕已生成的末尾对白，请续写】:\n" + "\n".join(existing_scene_lines[-5:])
+                    existing_hint += f"\n（已生成 {len(scene_collected)}/{scene_lines} 条，还需 {still_need} 条）"
+
+                type_desc = "旁白叙述为主" if scene_type == "narration" else "角色对话为主" if scene_type == "dialogue" else "旁白和对话均衡"
+                write_system = (
+                    "你是一个有声故事编剧。\n\n"
+                    "严格输出 JSON，不要输出任何其他文字（不要解释、不要总结）：\n"
+                    '{"dialogues":[{"character":"角色名","text":"对白内容","instruct":"此处场景情绪"}]}\n\n'
+                    f"必须生成恰好 {still_need} 条对白，{scene_type} 类型（{type_desc}），"
+                    "每条 15-40 字，只用给定角色。\n\n"
+                    "【instruct 规则】\n"
+                    "- instruct 是此条白在此场景下的情绪/语气提示，会叠加到角色基础风格上\n"
+                    "- 格式：直接写情绪词，如'略带紧张'、'低沉'、'温和'、'叙述性'\n"
+                    "- 同一角色的 instruct 基调应保持一致，允许小幅变化但不要剧烈跳跃\n"
+                    "- 示例：'略带紧张'、'低沉叙述'、'温和'、'平静略带感慨'\n"
+                    f"dialogues 数组长度必须等于 {still_need}。"
+                )
+
+                write_user = f"故事：{ep['title']}\n本集：{episode_summary}\n"
+                write_user += f"第 {scene_i + 1} 幕：{scene_summary}\n"
+                if chars_info:
+                    write_user += "角色：" + "、".join(c.split(" (")[0] for c in chars_info) + "\n"
+                if prev_summaries:
+                    write_user += "前情：" + "、".join(s[:30] for s in prev_summaries) + "\n"
+                if body.instruction:
+                    write_user += f"要求：{body.instruction}\n"
+                if context_tail:
+                    write_user += context_tail + "\n"
+                write_user += existing_hint + f"\n生成 {still_need} 条："
+
+                batch: list = []
+                for retry in range(3):
+                    est_tokens = int(still_need * 120) + 1000
+                    try:
+                        scene_result = chat_json([
+                            {"role": "system", "content": write_system},
+                            {"role": "user", "content": write_user},
+                        ], max_tokens=est_tokens, timeout=300)
+                    except Exception as e:
+                        sys.stderr.write(f"  [scene {scene_i+1}] retry={retry} ERROR: {e}\n")
+                        sys.stderr.flush()
+                        continue
+
+                    batch = scene_result.get("dialogues", [])
+                    sys.stderr.write(f"  [scene {scene_i+1}] retry={retry} still_need={still_need}, got={len(batch) if batch else 0}, collected={len(scene_collected)}\n")
+                    sys.stderr.flush()
+                    if batch:
+                        break
+
+                if not batch:
+                    break
+
+                batch = batch[:still_need]
+                scene_collected.extend(batch)
+                for b in batch:
+                    ch = b.get("character", "?")
+                    txt = b.get("text", "")[:30]
+                    existing_scene_lines.append(f"{ch}: {txt}")
+
+                if len(batch) < still_need:
+                    break
+
+            if scene_collected:
+                all_dialogues_data.extend(scene_collected)
+                completed_scenes_summary.append(scene_summary)
+
+            yield "scene_done", {"index": scene_i, "count": len(scene_collected)}
+
+        # ── 角色匹配与对白入库 ──
+        dialogues_data = all_dialogues_data
+        sys.stderr.write(f"  [RESULT] target={target_total}, scenes={len(scenes_plan)}, actual={len(dialogues_data)}\n")
+        sys.stderr.flush()
+
+        created = []
+        new_chars = []
+        new_char_cache: dict[str, str] = {}
+
+        for dlg_data in dialogues_data:
+            char_name = dlg_data.get("character", "").strip()
+            text = dlg_data.get("text", "")
+            instruct = dlg_data.get("instruct", "")
+
+            if not text:
+                continue
+
+            char_id, is_new = self._resolve_char_id(char_name, new_char_cache)
+            if is_new:
+                new_chars.append(char_name)
+
+            if char_id:
+                dlg = add_dialogue(self.project_id, self.episode_id, char_id, text, len(created), instruct)
+                if dlg:
+                    created.append(dlg["id"])
+                    total_created += 1
+                    yield "progress", {"current": total_created, "total": len(dialogues_data)}
+
+        # 事后校验：检查本次新建角色是否与已有角色重复
+        if new_chars:
+            existing_norm_map = {}
+            for c in proj.get("characters", []):
+                if c["name"] not in new_chars:
+                    n = _re.sub(r'[\s，。、；：！？""''（）【】《》\-·—_]', '', c["name"]).lower()
+                    if n:
+                        existing_norm_map[n] = c["id"]
+            chars_to_remove = []
+            id_remap = {}
+            for nc_name in list(new_chars):
+                nc_norm = _re.sub(r'[\s，。、；：！？""''（）【】《》\-·—_]', '', nc_name).lower()
+                if nc_norm in existing_norm_map:
+                    new_cid = new_char_cache.get(nc_name, "")
+                    existing_cid = existing_norm_map[nc_norm]
+                    if new_cid and existing_cid and new_cid != existing_cid:
+                        id_remap[new_cid] = existing_cid
+                    chars_to_remove.append(nc_name)
+            if id_remap:
+                for ep_item in proj.get("episodes", []):
+                    if ep_item.get("id") == self.episode_id:
+                        for d in ep_item.get("dialogues", []):
+                            if d.get("character_id") in id_remap:
+                                d["character_id"] = id_remap[d["character_id"]]
+                        break
+                proj["characters"] = [c for c in proj["characters"] if c["name"] not in chars_to_remove]
+                new_chars = [n for n in new_chars if n not in chars_to_remove]
+
+        if new_chars:
+            yield "new_characters", {"names": new_chars}
+
+        yield "complete", {
+            "created": len(created),
+            "dialogue_ids": created,
+            "new_characters": new_chars,
+            "_debug": {
+                "target": target_total,
+                "scenes": len(scenes_plan),
+                "actual": len(dialogues_data),
+            },
+        }
