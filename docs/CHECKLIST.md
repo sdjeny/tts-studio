@@ -79,3 +79,37 @@
 | 前端编译无报错 | `npm run build` 成功 | `dist/` 目录有最新产物 |
 | 前端服务正常 | 访问 5173 返回 200 | `curl http://localhost:5173/` |
 | API 代理正常 | `/api/*` 代理到 8000 | 前端页面能正常加载项目列表 |
+
+## 九、配置页面（Issue #11）
+
+### 9.1 Config API
+
+| 检查项 | 期望值 | 验证方式 | 实际结果 |
+|--------|--------|----------|----------|
+| `GET /api/config` | 返回完整配置，含 llm/tts 节点 | `curl http://localhost:8000/api/config` | ✅ 返回 llm + tts 节点 |
+| api_key 脱敏 | 显示为 `****` 或 `xxxx****yyyy` | GET 返回中 `llm.api_key` 不含原始值 | ✅ `****` |
+| `PATCH /api/config` 修改单字段 | temperature 更新为新值 | `curl -X PATCH ... -d '{"data":{"llm":{"temperature":0.85}}}'` | ✅ 0.85 |
+| `PATCH /api/config` 修改嵌套字段 | tts.base_url 更新 | `curl -X PATCH ... -d '{"data":{"tts":{"base_url":"http://test:1234"}}}'` | ✅ |
+| PATCH 脱敏值不覆盖 | 传 `xxxx****abcd` 时跳过，保留真实 key | PATCH 后 GET 验证 api_key 仍为脱敏值 | ✅ 跳过 |
+| PATCH 空 body `{}` | 返回 422（缺少 data 字段） | `curl -X PATCH -d '{}'` | ✅ 422 |
+| PATCH 无效 JSON | 返回 422 | `curl -X PATCH -d 'not json'` | ✅ 422 |
+| 配置持久化 | PATCH 后 config.yaml 写入新值 | `grep temperature config.yaml` | ✅ 持久化 |
+| `GET /api/health` | `{"status":"ok"}` | `curl /api/health` | ✅ |
+
+### 9.2 前端 Settings 页面
+
+| 检查项 | 期望值 | 验证方式 | 实际结果 |
+|--------|--------|----------|----------|
+| 首页可访问 | HTTP 200 | `curl -o /dev/null -w '%{http_code}' /` | ✅ 200 |
+| Settings 入口可见 | header 有 ⚙️ 按钮 | 浏览器截图验证 | ⬜ 待浏览器环境 |
+| 配置表单渲染 | 显示 llm/tts 等节点卡片 | 浏览器截图验证 | ⬜ 待浏览器环境 |
+| api_key 显示脱敏 | 输入框显示 `****` | 浏览器检查 | ⬜ 待浏览器环境 |
+| 保存后 toast | 绿色成功提示 | 浏览器操作验证 | ⬜ 待浏览器环境 |
+| 保存后持久化 | 刷新页面值还在 | 浏览器刷新验证 | ⬜ 待浏览器环境 |
+| 控制台无 JS 错误 | Console 无红色报错 | `browser_console()` | ⬜ 待浏览器环境 |
+
+### 9.3 注意事项
+
+- 空 body `{}` 返回 422 是正确行为（Pydantic 要求 `data` 字段）
+- 前端测试项需要 Chrome/Chromium 环境，当前容器未安装，待补充
+- 测试完成后需还原配置到原始值
