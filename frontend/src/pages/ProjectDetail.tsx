@@ -387,9 +387,8 @@ function AIGenPanel({ project, onChange, onError }: {
                 <input
                   type="number"
                   value={numEpisodes}
-                  onChange={(e) => setNumEpisodes(Math.max(1, Math.min(30, parseInt(e.target.value) || 3)))}
+                  onChange={(e) => setNumEpisodes(Math.max(1, parseInt(e.target.value) || 3))}
                   min={1}
-                  max={30}
                   style={{ ...inputMd, width: 80 }}
                 />
               </div>
@@ -554,8 +553,8 @@ function AIGenPanel({ project, onChange, onError }: {
                       <input
                         type="number"
                         value={regenNum}
-                        onChange={(e) => setRegenNum(Math.max(1, Math.min(30, parseInt(e.target.value) || 3)))}
-                        min={1} max={30}
+                        onChange={(e) => setRegenNum(Math.max(1, parseInt(e.target.value) || 3))}
+                        min={1}
                         style={{ ...inputMd, width: 60 }}
                       />
                     </div>
