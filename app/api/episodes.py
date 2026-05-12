@@ -1219,6 +1219,8 @@ class DialogueGenRequest(BaseModel):
     instruction: str = ""  # 额外指令（可选）
     target_duration_min: int = 25  # 目标时长（分钟），默认 25
     narration_ratio: int = 50  # 旁白比例 0-100，默认 50
+    style: str = ""  # 故事风格（可选）
+    temperature: float = 0.7  # LLM 温度（默认 0.7）
 
 
 # ── Regenerate outline from a specific episode ──────────
@@ -1424,13 +1426,13 @@ async def api_generate_episodes(project_id: str, body: EpisodeGenRequest):
 
 @router.post("/projects/{project_id}/episodes/{episode_id}/generate-dialogues")
 async def api_generate_dialogues(project_id: str, episode_id: str, body: DialogueGenRequest):
-    """用 LLM 根据剧集摘要生成讲故事风格的白话叙事（含旁白+对话+场景描写）。SSE 流式返回。"""
+    """用 LLM 根据剧集摘要生成完整故事文本（方案B-2），解析后入库。SSE 流式返回。"""
     from app.core.dialogue_service import DialogueGenerator
 
     async def sse_stream():
         import json as _sse_json
         gen = DialogueGenerator(project_id, episode_id, body)
-        async for event_type, data in gen.generate():
+        async for event_type, data in gen._generate_story():
             yield f"event: {event_type}\ndata: {_sse_json.dumps(data, ensure_ascii=False)}\n\n".encode("utf-8")
 
     return StreamingResponse(sse_stream(), media_type="text/event-stream")
