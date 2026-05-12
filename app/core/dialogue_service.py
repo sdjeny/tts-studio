@@ -48,6 +48,216 @@ class DialogueGenerator:
         self.body = body
         self.proj = get_project(project_id)
         self.ep = get_episode(project_id, episode_id)
+    def _parse_story_text(self, text: str) -> list[dict]:
+        """解析LLM生成的完整故事文本，提取角色名、instruct、text。
+
+        Args:
+            text: LLM生成的完整故事文本
+
+        Returns:
+            list of dict: [{"role": "小明", "instruct": "沉声", "text": "..."}, ...]
+        """
+        import re
+        pattern = r'\[([^\]]+)\](?:\s*（([^）]+)）)?\s*(.*?)(?=\n\[|\Z)'
+        matches = re.findall(pattern, text, re.DOTALL)
+
+        result = []
+        for role, instruct, text_content in matches:
+            text_content = text_content.strip()
+            if not text_content:
+                continue
+            # 清理markdown代码块
+            if text_content.startswith('```'):
+                text_content = re.sub(r'^```\w*\n?', '', text_content)
+                text_content = re.sub(r'\n?```$', '', text_content)
+                text_content = text_content.strip()
+            result.append({
+                "role": role.strip(),
+                "instruct": instruct.strip() if instruct else "",
+                "text": text_content
+            })
+        return result
+
+    async def _generate_story(self):
+        """一次性生成完整故事文本，解析后入库。yield SSE 事件。"""
+        proj = self.proj
+        ep = self.ep
+        body = self.body
+
+        llm_cfg = get_llm_config()
+        if not llm_cfg.get("base_url") or not llm_cfg.get("api_key"):
+            yield "error", {"message": "LLM 未配置，请先填写 app/config.yaml 中的 llm.base_url 和 llm.api_key"}
+            return
+
+        episode_summary = ep.get("summary", "")
+        if not episode_summary:
+            yield "error", {"message": "该剧集没有摘要，请先生成或填写摘要"}
+            return
+
+        chars_info = _build_chars_info(proj, detailed=True)
+
+        # T3: 上下文注入 — 前情（第1集~第N-1集）
+        prev_summaries = []
+        for prev_ep in proj.get("episodes", []):
+            if prev_ep["id"] == self.episode_id:
+                break
+            if prev_ep.get("summary"):
+                prev_summaries.append(f"《{prev_ep['title']}》: {prev_ep['summary']}")
+
+        # T3: 后续（第N+1~第N+5集，最多5章）
+        all_eps = proj.get("episodes", [])
+        ep_index = next((i for i, e in enumerate(all_eps) if e["id"] == self.episode_id), 0)
+        next_summaries = []
+        for i in range(ep_index + 1, min(ep_index + 6, len(all_eps))):
+            ne = all_eps[i]
+            if ne.get("summary"):
+                next_summaries.append(f"《{ne['title']}》: {ne['summary']}")
+
+        # T4: 可配置参数
+        target_duration_min = getattr(body, 'target_duration_min', 25)
+        narration_ratio = getattr(body, 'narration_ratio', 20)
+        style = getattr(body, 'style', '')
+        temperature = getattr(body, 'temperature', 0.7)
+        word_count = int(target_duration_min * 260)
+
+        style_prompt = f"\n【风格要求】\n{style}" if style else ""
+
+        # T4: 构建 prompt
+        system = f"""你是一个有声故事编剧。根据摘要生成一个完整的故事。
+
+【输出格式】
+每段开头用[]标注角色名，旁白标[旁白]，对话用[角色名]。
+对话/独白必须在括号里标注情绪，如：[小明]（低声）...[小红]（兴奋）...
+旁白不标注情绪。
+
+【字数控制】
+总字数约{word_count}字（允许±20%浮动）。
+
+【旁白占比】
+旁白约占{narration_ratio}%。
+{style_prompt}
+
+【衔接要求】
+- 本章内容必须承前启后，与前后章节自然衔接
+- 如果有后续章节，本章不能提前消耗后续的关键情节或悬念
+- 如果没有后续章节（最终章），本章必须完整收尾，给出结局
+
+输出纯文本，不要JSON，不要解释。"""
+
+        user = f"标题：{ep['title']}\n摘要：{episode_summary}\n"
+        if chars_info:
+            user += "角色信息（性格+朗读风格，角色行为需符合其性格）：\n"
+            for c in chars_info:
+                user += f"  {c}\n"
+        if prev_summaries:
+            user += f"\n【前情】\n" + "\n".join(f"  {i+1}. {s}" for i, s in enumerate(prev_summaries)) + "\n"
+        if next_summaries:
+            user += f"\n【后续章节摘要（请勿提前消耗其关键情节）】\n" + "\n".join(f"  {i+1}. {s}" for i, s in enumerate(next_summaries)) + "\n"
+        else:
+            user += "\n【后续】无（本章为最终章）\n"
+        if getattr(body, 'instruction', ''):
+            user += f"\n额外要求：{body.instruction}\n"
+        user += f"\n请生成约{word_count}字的完整故事。"
+
+        yield "generating", {"word_count": word_count, "narration_ratio": narration_ratio, "style": style}
+
+        # 调用 LLM（用 chat_json，因为底层用的是 openai chat，返回纯文本）
+        sys.stderr.write(f"  [B2-STORY] word_count={word_count}, temp={temperature}\n")
+        sys.stderr.flush()
+
+        try:
+            from app.core.llm import chat as _chat_raw
+            story_text = _chat_raw([
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ], max_tokens=max(4096, word_count * 3), timeout=600, temperature=temperature)
+        except Exception as e:
+            yield "error", {"message": f"LLM 故事生成失败: {e}"}
+            return
+
+        if not story_text or not story_text.strip():
+            yield "error", {"message": "LLM 返回空故事文本"}
+            return
+
+        sys.stderr.write(f"  [B2-STORY] raw text length={len(story_text)}\n")
+        sys.stderr.flush()
+
+        # T1: 解析故事文本
+        parsed = self._parse_story_text(story_text)
+        if not parsed:
+            yield "error", {"message": "无法解析故事文本，请检查输出格式"}
+            return
+
+        yield "story_parsed", {"total_segments": len(parsed)}
+
+        # T5: 角色匹配入库
+        created = []
+        new_chars = []
+        new_char_cache: dict = {}
+
+        for idx, item in enumerate(parsed):
+            char_name = item["role"]
+            instruct = item["instruct"]
+            text = item["text"]
+
+            char_id, is_new = self._resolve_char_id(char_name, new_char_cache)
+            if is_new:
+                new_chars.append(char_name)
+
+            if char_id:
+                dlg = add_dialogue(self.project_id, self.episode_id, char_id, text, idx, instruct)
+                if dlg:
+                    created.append(dlg["id"])
+                    yield "progress", {"current": len(created), "total": len(parsed)}
+
+        # 角色重复校验（复用原有逻辑）
+        if new_chars:
+            existing_norm_map = {}
+            for c in proj.get("characters", []):
+                if c["name"] not in new_chars:
+                    n = _re.sub(r'[\s，。、；：！？""''（）【】《》\-·—_]', '', c["name"]).lower()
+                    if n:
+                        existing_norm_map[n] = c["id"]
+            chars_to_remove = []
+            id_remap = {}
+            for nc_name in list(new_chars):
+                nc_norm = _re.sub(r'[\s，。、；：！？""''（）【】《》\-·—_]', '', nc_name).lower()
+                if nc_norm in existing_norm_map:
+                    new_cid = new_char_cache.get(nc_name, "")
+                    existing_cid = existing_norm_map[nc_norm]
+                    if new_cid and existing_cid and new_cid != existing_cid:
+                        id_remap[new_cid] = existing_cid
+                    chars_to_remove.append(nc_name)
+            if id_remap:
+                from app.core import store
+                async with store.atomic_update() as data:
+                    for p in data["projects"]:
+                        if p["id"] == self.project_id:
+                            for ep_in in p["episodes"]:
+                                if ep_in["id"] == self.episode_id:
+                                    for d in ep_in["dialogues"]:
+                                        if d.get("character_id") in id_remap:
+                                            d["character_id"] = id_remap[d["character_id"]]
+                                    break
+                            p["characters"] = [c for c in p["characters"] if c["name"] not in chars_to_remove]
+                            break
+                proj["characters"] = [c for c in proj["characters"] if c["name"] not in chars_to_remove]
+                new_chars = [n for n in new_chars if n not in chars_to_remove]
+
+        if new_chars:
+            yield "new_characters", {"names": new_chars}
+
+        yield "complete", {
+            "created": len(created),
+            "dialogue_ids": created,
+            "new_characters": new_chars,
+            "_debug": {
+                "word_count": word_count,
+                "parsed_segments": len(parsed),
+                "actual": len(created),
+            },
+        }
+
 
     def _resolve_char_id(self, char_name: str, new_char_cache: dict) -> tuple:
         """解析角色名到 character_id。返回 (char_id, is_new)。"""
