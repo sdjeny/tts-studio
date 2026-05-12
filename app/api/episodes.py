@@ -813,63 +813,6 @@ async def api_generate_batch_audio(project_id: str, episode_id: str, body: Batch
             update_generation_task(project_id, task_id, status="error", error=str(e))
             raise
 
-                if not dlg:
-                    msg = _json.dumps({"index": i, "total": total, "dialogue_id": dlg_id, "status": "error", "error": "对白不存在"}, ensure_ascii=False)
-                    yield f"data: {msg}\n\n"
-                    failed_list.append(dlg_id)
-                    continue
-
-                try:
-                    # 统一解析 TTS 参数（与单条路径共用同一函数，确保行为一致）
-                    tts_kwargs = _resolve_dialogue_tts_params(project_id, dlg, proj)
-                    task_id_inner = await submit_tts(**tts_kwargs)
-                    submitted += 1
-
-                    # 写回 store：创建占位记录
-                    placeholder_id = f"gen_{uuid.uuid4().hex[:8]}"
-                    data = store._read()
-                    for p in data["projects"]:
-                        if p["id"] == project_id:
-                            for ep_in in p["episodes"]:
-                                if ep_in["id"] == episode_id:
-                                    for d in ep_in["dialogues"]:
-                                        if d["id"] == dlg_id:
-                                            d["audio_history"].append({
-                                                "id": placeholder_id,
-                                                "url": "",
-                                                "filename": "",
-                                                "created_at": _now(),
-                                                "status": "generating",
-                                                "task_id": task_id_inner,
-                                            })
-                                            d["current_audio_id"] = placeholder_id
-                                            d["status"] = "generating"
-                                    break
-                            break
-                    store._write(data)
-
-                    # 启动后台下载（不等完成）
-                    asyncio.create_task(
-                        _download_and_save(project_id, episode_id, dlg_id, task_id_inner, placeholder_id)
-                    )
-
-                    update_generation_task(project_id, task_id, current=submitted + len(failed_list))
-                    msg = _json.dumps({"index": i, "total": total, "dialogue_id": dlg_id, "status": "submitted", "task_id": task_id_inner}, ensure_ascii=False)
-                    yield f"data: {msg}\n\n"
-
-                except Exception as e:
-                    msg = _json.dumps({"index": i, "total": total, "dialogue_id": dlg_id, "status": "error", "error": str(e)}, ensure_ascii=False)
-                    yield f"data: {msg}\n\n"
-                    failed_list.append(dlg_id)
-
-            update_generation_task(project_id, task_id, status="complete", current=submitted + len(failed_list))
-            # 发送汇总
-            summary = _json.dumps({"status": "done", "total": total, "submitted": submitted, "failed_count": len(failed_list)}, ensure_ascii=False)
-            yield f"data: {summary}\n\n"
-        except Exception as e:
-            update_generation_task(project_id, task_id, status="error", error=str(e))
-            raise
-
     return StreamingResponse(
         _stream(),
         media_type="text/event-stream",
