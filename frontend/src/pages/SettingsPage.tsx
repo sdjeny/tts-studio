@@ -357,7 +357,7 @@ export default function SettingsPage() {
     );
   }
 
-  const sections = Object.entries(config).filter(
+  const sections = Object.entries(edited || config).filter(
     ([_, v]) => v && typeof v === "object" && !Array.isArray(v)
   );
 
