@@ -262,3 +262,142 @@ class TestResolveCharId:
             # 验证 voice_id 传入正确
             call_args = mock_add.call_args
             assert call_args[0][2] == "serena"  # voice_id 参数
+
+
+# ===================================================================
+# T11: 引号感知解析测试 (Refs #23)
+# ===================================================================
+
+class TestQuoteAwareParsing:
+    """测试引号感知解析逻辑 — 引号内→角色对话，引号外→旁白"""
+
+    def setup_method(self):
+        self.gen = _make_generator()
+
+    def test_quotes_only_role_text(self):
+        """引号内内容 → 角色对话"""
+        text = '[李伟]（低声）"我回来了，父亲……"'
+        result = self.gen._parse_story_text(text)
+
+        assert len(result) == 1
+        assert result[0]["role"] == "李伟"
+        assert result[0]["instruct"] == "低声"
+        assert result[0]["text"] == "我回来了，父亲……"
+
+    def test_quotes_with_post_narration(self):
+        """引号后描述 → 独立旁白"""
+        text = '[李伟]（低声）"我回来了，父亲……" 他的声音在空旷的殿宇里回荡。'
+        result = self.gen._parse_story_text(text)
+
+        assert len(result) == 2
+        assert result[0]["role"] == "李伟"
+        assert result[0]["text"] == "我回来了，父亲……"
+        assert result[1]["role"] == "旁白"
+        assert "他的声音在空旷的殿宇里回荡" in result[1]["text"]
+
+    def test_quotes_with_pre_narration(self):
+        """引号前描述 → 独立旁白"""
+        text = '[李伟]（低声）他低声说。"我回来了。"'
+        result = self.gen._parse_story_text(text)
+
+        assert len(result) == 2
+        assert result[0]["role"] == "旁白"
+        assert result[0]["text"] == "他低声说。"
+        assert result[1]["role"] == "李伟"
+        assert result[1]["text"] == "我回来了。"
+
+    def test_multiple_quotes_separate_entries(self):
+        """多个引号 → 每条独立成条目（不拼合）"""
+        text = '[小明]（高兴）"你好！""再见！"\n[小红]（微笑）"嗯，好的。"'
+        result = self.gen._parse_story_text(text)
+
+        assert len(result) == 3
+        assert result[0]["role"] == "小明"
+        assert result[0]["text"] == "你好！"
+        assert result[1]["role"] == "小明"
+        assert result[1]["text"] == "再见！"
+        assert result[2]["role"] == "小红"
+        assert result[2]["text"] == "嗯，好的。"
+
+    def test_consecutive_dialogue_no_narration(self):
+        """连续对白（无旁白间隔）"""
+        text = '[李伟]（低声）"我回来了。" [小明] (兴奋) "哈哈哈"'
+        result = self.gen._parse_story_text(text)
+
+        assert len(result) == 2
+        assert result[0]["role"] == "李伟"
+        assert result[0]["instruct"] == "低声"
+        assert result[0]["text"] == "我回来了。"
+        assert result[1]["role"] == "小明"
+        assert result[1]["instruct"] == "兴奋"
+        assert result[1]["text"] == "哈哈哈"
+
+    def test_unmarked_paragraph_becomes_narration(self):
+        """无标记段落 → 旁白"""
+        text = "夜色沉沉，雨后的街灯。"
+        result = self.gen._parse_story_text(text)
+
+        assert len(result) == 1
+        assert result[0]["role"] == "旁白"
+        assert result[0]["text"] == "夜色沉沉，雨后的街灯。"
+
+    def test_consecutive_unmarked_merged(self):
+        """连续无标记段落 → 合并为一条旁白"""
+        text = "第一段旁白。\n第二段旁白。\n[小明]（沉声）对话。"
+        result = self.gen._parse_story_text(text)
+
+        assert len(result) == 2
+        assert result[0]["role"] == "旁白"
+        assert "第一段旁白" in result[0]["text"]
+        assert "第二段旁白" in result[0]["text"]
+        assert result[1]["role"] == "小明"
+
+    def test_mixed_scene(self):
+        """混合场景：旁白+角色+引号外描述+角色+旁白"""
+        text = (
+            "[旁白] 暮色笼罩着山谷。\n"
+            '[李伟]（沉稳）"娜，今天的练习感觉怎么样？"\n'
+            "他的声音温和而平静。\n"
+            '[李娜]（敏感）"哥，我总是跟不上你的步伐。"\n'
+            "李娜低下了头。\n"
+            "[旁白] 夜色渐深。"
+        )
+        result = self.gen._parse_story_text(text)
+
+        assert len(result) == 6
+        assert result[0]["role"] == "旁白"
+        assert "暮色笼罩" in result[0]["text"]
+        assert result[1]["role"] == "李伟"
+        assert result[1]["text"] == "娜，今天的练习感觉怎么样？"
+        assert result[2]["role"] == "旁白"
+        assert "他的声音温和" in result[2]["text"]
+        assert result[3]["role"] == "李娜"
+        assert result[3]["text"] == "哥，我总是跟不上你的步伐。"
+        assert result[4]["role"] == "旁白"
+        assert "李娜低下了头" in result[4]["text"]
+        assert result[5]["role"] == "旁白"
+        assert "夜色渐深" in result[5]["text"]
+
+    def test_backward_compat_no_quotes(self):
+        """向后兼容：无引号格式"""
+        text = "[旁白] 夜色沉沉。\n[小明]（沉声）这纸张已经发黄。\n[小红]（活泼）哎呀，明哥。"
+        result = self.gen._parse_story_text(text)
+
+        assert len(result) == 3
+        assert result[0]["role"] == "旁白"
+        assert result[1]["role"] == "小明"
+        assert result[1]["text"] == "这纸张已经发黄。"
+        assert result[2]["role"] == "小红"
+
+    def test_empty_input(self):
+        """空输入返回空列表"""
+        assert self.gen._parse_story_text("") == []
+
+    def test_only_narration_markers(self):
+        """只有 [旁白] 标记"""
+        text = "[旁白] 夜色沉沉，雨后的街灯。"
+        result = self.gen._parse_story_text(text)
+
+        assert len(result) == 1
+        assert result[0]["role"] == "旁白"
+        assert result[0]["text"] == "夜色沉沉，雨后的街灯。"

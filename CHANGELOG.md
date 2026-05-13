@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [未发布] Issue #23 — 修复对白解析逻辑
+
+### Fixed
+- `_parse_story_text()` 重写 — 引号感知解析（fix #23）
+  - 引号内内容 → 角色对话（每个引号单独一条，不拼合）
+  - 引号外描述性文字 → 独立 `[旁白]` 条目
+  - 无标记段落 → `[旁白]`（连续无标记段落合并）
+  - 情绪标注括号提取改用 `str.find`，避免 Python 3.13 正则 bug
+  - 向后兼容无引号格式
+
+### Added
+- `episode.raw_text` 字段 — 保存 LLM 原始生成文本（Refs #23）
+- `store.create_episode()` / `update_episode()` 支持 `raw_text` 参数
+- 数据迁移：旧 episode 自动补充 `raw_text` 字段
+
+### Tests
+- `tests/test_dialogue_parser.py` 新增 10 个测试用例覆盖新解析逻辑
+- E2E 验证：暗潮涌动项目 88 条对白解析入库成功
+
 ## [2026-05-12] Issue #19 — LLM对白生成方案B-2
 
 ### Changed
