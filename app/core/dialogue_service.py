@@ -292,7 +292,7 @@ class DialogueGenerator:
 
         dialogues = parse_story_with_two_step(
             story_text,
-            known_chars=[c["name"] for c in chars_info] if chars_info else None
+            known_chars=[c.split(" (")[0].lstrip("- ") for c in chars_info] if chars_info else None
         )
 
         if not dialogues:
