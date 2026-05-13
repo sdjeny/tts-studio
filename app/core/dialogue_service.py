@@ -237,6 +237,11 @@ class DialogueGenerator:
 旁白约占{narration_ratio}%。
 {style_prompt}
 
+【对话格式】
+- 角色对话必须用「」引号包裹，例如：黎维：「数据已上传，所有人都能看到真相。」
+- 旁白不需要引号，直接叙述即可
+- 不要使用【角色名】或（情绪）标注格式
+
 【衔接要求】
 - 本章内容必须承前启后，与前后章节自然衔接
 - 如果有后续章节，本章不能提前消耗后续的关键情节或悬念
@@ -286,6 +291,17 @@ class DialogueGenerator:
         update_episode(self.project_id, self.episode_id, raw_text=story_text)
         # 同步更新 self.ep 中的 raw_text，避免后续使用旧缓存
         self.ep["raw_text"] = story_text
+
+        # T1: 清除旧对白，避免重复叠加
+        from app.core import store
+        async with store.atomic_update() as data:
+            for p in data["projects"]:
+                if p["id"] == self.project_id:
+                    for ep_in in p["episodes"]:
+                        if ep_in["id"] == self.episode_id:
+                            ep_in["dialogues"] = []
+                            break
+                    break
 
         # T1: 调用两步解析器
         from app.core.dialogue_parser import parse_story_with_two_step
