@@ -259,7 +259,24 @@ def delete_character(project_id: str, char_id: str) -> bool:
 
 def project_episodes(project_id: str) -> list[dict]:
     p = get_project(project_id)
-    return p["episodes"] if p else []
+    if not p:
+        return []
+    # 数据迁移：旧 episode 补充 raw_text 字段
+    dirty = False
+    for ep in p["episodes"]:
+        if "raw_text" not in ep:
+            ep["raw_text"] = ""
+            dirty = True
+    if dirty:
+        data = _read()
+        for proj in data["projects"]:
+            if proj["id"] == project_id:
+                for ep in proj["episodes"]:
+                    if "raw_text" not in ep:
+                        ep["raw_text"] = ""
+                _write(data)
+                break
+    return p["episodes"]
 
 
 def get_episode(project_id: str, episode_id: str) -> dict | None:
@@ -268,11 +285,22 @@ def get_episode(project_id: str, episode_id: str) -> dict | None:
         return None
     for ep in p["episodes"]:
         if ep["id"] == episode_id:
+            # 数据迁移：旧 episode 补充 raw_text 字段
+            if "raw_text" not in ep:
+                ep["raw_text"] = ""
+                data = _read()
+                for proj in data["projects"]:
+                    if proj["id"] == project_id:
+                        for e in proj["episodes"]:
+                            if e["id"] == episode_id and "raw_text" not in e:
+                                e["raw_text"] = ""
+                        _write(data)
+                        break
             return ep
     return None
 
 
-def create_episode(project_id: str, title: str) -> dict | None:
+def create_episode(project_id: str, title: str, raw_text: str = "") -> dict | None:
     data = _read()
     for p in data["projects"]:
         if p["id"] == project_id:
@@ -283,6 +311,7 @@ def create_episode(project_id: str, title: str) -> dict | None:
                 "style_enabled": False,  # 剧集默认关闭风格
                 "created_at": _now(),
                 "dialogues": [],
+                "raw_text": raw_text,
             }
             p["episodes"].append(ep)
             _write(data)
