@@ -7,7 +7,7 @@ from difflib import SequenceMatcher
 
 from app.core.llm import chat_json, get_llm_config
 from app.core.store import (
-    get_project, get_episode, add_dialogue, add_character,
+    get_project, get_episode, add_dialogue, add_character, update_episode,
 )
 
 # TTS 服务支持的音色列表（与 episodes.py 中 _VALID_VOICES 保持一致）
@@ -51,6 +51,14 @@ class DialogueGenerator:
     def _parse_story_text(self, text: str) -> list[dict]:
         """解析LLM生成的完整故事文本，提取角色名、instruct、text。
 
+        新解析逻辑（多步拼合）：
+        1. 按 [角色名] 标记切分段落
+        2. 无标记段落 → 作为 [旁白] 条目（连续无标记段落合并）
+        3. 有标记段落 → 提取角色名+情绪+text
+           - text 优先取英文引号 "" 内的内容
+           - 引号外的描述性文字拼合到该角色的 text 里（用换行分隔）
+           - 无引号时整体作为 text（向后兼容）
+
         Args:
             text: LLM生成的完整故事文本
 
@@ -58,24 +66,125 @@ class DialogueGenerator:
             list of dict: [{"role": "小明", "instruct": "沉声", "text": "..."}, ...]
         """
         import re
-        pattern = r'\[([^\]]+)\](?:\s*（([^）]+)）)?\s*(.*?)(?=\n\[|\Z)'
-        matches = re.findall(pattern, text, re.DOTALL)
+
+        # 按 [标记] 切分段落，保留标记内容
+        marker_pattern = re.compile(r'\[([^\]]+)\]')
+        markers = list(marker_pattern.finditer(text))
 
         result = []
-        for role, instruct, text_content in matches:
-            text_content = text_content.strip()
-            if not text_content:
-                continue
-            # 清理markdown代码块
-            if text_content.startswith('```'):
-                text_content = re.sub(r'^```\w*\n?', '', text_content)
-                text_content = re.sub(r'\n?```$', '', text_content)
-                text_content = text_content.strip()
-            result.append({
-                "role": role.strip(),
-                "instruct": instruct.strip() if instruct else "",
-                "text": text_content
-            })
+        narration_buffer = []  # 用于合并连续无标记段落
+
+        def flush_narration():
+            """将累积的旁白缓冲区写入结果"""
+            nonlocal narration_buffer
+            if narration_buffer:
+                merged = "\n".join(narration_buffer).strip()
+                if merged:
+                    result.append({
+                        "role": "旁白",
+                        "instruct": "",
+                        "text": merged,
+                    })
+                narration_buffer = []
+
+        if not markers:
+            # 整个文本没有任何标记，整体作为旁白
+            stripped = text.strip()
+            if stripped:
+                result.append({"role": "旁白", "instruct": "", "text": stripped})
+            return result
+
+        # 处理第一个标记之前的无标记段落
+        first_marker_start = markers[0].start()
+        if first_marker_start > 0:
+            prefix = text[:first_marker_start].strip()
+            if prefix:
+                narration_buffer.append(prefix)
+
+        for i, marker in enumerate(markers):
+            role_name = marker.group(1).strip()
+            # 标记之后的内容：从标记结束到下一个标记开始（或文本末尾）
+            content_start = marker.end()
+            if i + 1 < len(markers):
+                content_end = markers[i + 1].start()
+            else:
+                content_end = len(text)
+            raw_content = text[content_start:content_end].strip()
+
+            # 从 raw_content 中提取情绪标注（xxx）和内容
+            instruct = ""
+            inner_text = raw_content
+            # 用 str.find 避免正则引擎 bug
+            paren_chars = [('（', '）'), ('(', ')')]
+            for left, right in paren_chars:
+                if raw_content.startswith(left):
+                    end_pos = raw_content.find(right, 1)
+                    if end_pos != -1:
+                        instruct = raw_content[1:end_pos].strip()
+                        inner_text = raw_content[end_pos + 1:].strip()
+                        break
+
+            # 提取引号内容 + 引号外描述，拼合成一个完整 text
+            quote_iter = list(re.finditer(r'"([^"]*)"', inner_text))
+            quoted_parts = [qm.group(1) for qm in quote_iter]
+
+            if quoted_parts:
+                # 有引号：引号内容作为角色对话（多引号不拆散）
+                # 引号外描述性文字 → 独立旁白
+                # 步骤：1) flush开头旁白 2) 添加角色条目(多引号拼合) 3) flush引号后旁白
+                flush_narration()
+
+                # 收集引号外描述文字（旁白）
+                pre_narration = []
+                post_narration = []
+                # 第一段引号前的描述
+                first_q_start = quote_iter[0].start()
+                if first_q_start > 0:
+                    before = inner_text[:first_q_start].strip()
+                    if before:
+                        pre_narration.append(before)
+                # 最后一段引号后的描述
+                last_q_end = quote_iter[-1].end()
+                last_qm = quote_iter[-1]
+                # 重新获取最后一个引号后的内容
+                after = inner_text[quote_iter[-1].end():].strip()
+                if after:
+                    post_narration.append(after)
+
+                # 输出引号前旁白
+                for nar in pre_narration:
+                    result.append({"role": "旁白", "instruct": "", "text": nar})
+
+                # 输出角色条目：每个引号内容单独一条
+                for qt in quoted_parts:
+                    result.append({
+                        "role": role_name,
+                        "instruct": instruct,
+                        "text": qt,
+                    })
+
+                # 输出引号后旁白
+                for nar in post_narration:
+                    result.append({"role": "旁白", "instruct": "", "text": nar})
+            else:
+                # 无引号：整体作为 text（向后兼容）
+                flush_narration()
+                text_content = inner_text
+                # 清理markdown代码块
+                if text_content.startswith('```'):
+                    text_content = re.sub(r'^```\w*\n?', '', text_content)
+                    text_content = re.sub(r'\n?```$', '', text_content)
+                    text_content = text_content.strip()
+                if text_content:
+                    result.append({
+                        "role": role_name,
+                        "instruct": instruct,
+                        "text": text_content,
+                    })
+
+        # 处理最后一个标记之后的无标记段落
+        flush_narration()
+
         return result
 
     async def _generate_story(self):
@@ -181,6 +290,11 @@ class DialogueGenerator:
 
         sys.stderr.write(f"  [B2-STORY] raw text length={len(story_text)}\n")
         sys.stderr.flush()
+
+        # T3: 保存 raw_text 到 episode（在解析之前保存原始文本）
+        update_episode(self.project_id, self.episode_id, raw_text=story_text)
+        # 同步更新 self.ep 中的 raw_text，避免后续使用旧缓存
+        self.ep["raw_text"] = story_text
 
         # T1: 解析故事文本
         parsed = self._parse_story_text(story_text)
