@@ -51,13 +51,13 @@ class DialogueGenerator:
     def _parse_story_text(self, text: str) -> list[dict]:
         """解析LLM生成的完整故事文本，提取角色名、instruct、text。
 
-        新解析逻辑：
+        新解析逻辑（多步拼合）：
         1. 按 [角色名] 标记切分段落
-        2. 标记段落：提取角色名+情绪+text，text 只取英文引号 "" 内的内容
-        3. 无标记段落：整体作为 [旁白] 条目
-        4. 引号外的描述性文字（角色标记之后、下一个标记之前、无引号的内容）：作为 [旁白] 条目
-        5. 连续无标记段落合并为一条旁白
-        6. 保持向后兼容（支持有/无 "" 两种格式）
+        2. 无标记段落 → 作为 [旁白] 条目（连续无标记段落合并）
+        3. 有标记段落 → 提取角色名+情绪+text
+           - text 优先取英文引号 "" 内的内容
+           - 引号外的描述性文字拼合到该角色的 text 里（用换行分隔）
+           - 无引号时整体作为 text（向后兼容）
 
         Args:
             text: LLM生成的完整故事文本
@@ -68,7 +68,6 @@ class DialogueGenerator:
         import re
 
         # 按 [标记] 切分段落，保留标记内容
-        # 找到所有 [xxx] 标记的位置
         marker_pattern = re.compile(r'\[([^\]]+)\]')
         markers = list(marker_pattern.finditer(text))
 
@@ -113,68 +112,77 @@ class DialogueGenerator:
             raw_content = text[content_start:content_end].strip()
 
             # 从 raw_content 中提取情绪标注（xxx）和内容
-            # 情绪标注可能在角色名后的括号里：[小明]（沉声）内容
             instruct = ""
             inner_text = raw_content
+            # 用 str.find 避免正则引擎 bug
+            paren_chars = [('（', '）'), ('(', ')')]
+            for left, right in paren_chars:
+                if raw_content.startswith(left):
+                    end_pos = raw_content.find(right, 1)
+                    if end_pos != -1:
+                        instruct = raw_content[1:end_pos].strip()
+                        inner_text = raw_content[end_pos + 1:].strip()
+                        break
 
-            # 检查是否有情绪标注括号
-            paren_match = re.match(r'^(?:（([^）]+）)|(\(([^)]+)\)))\s*', raw_content)
-            if paren_match:
-                instruct = (paren_match.group(1) or paren_match.group(3) or "").strip()
-                inner_text = raw_content[paren_match.end():].strip()
+            # 提取引号内容 + 引号外描述，拼合成一个完整 text
+            quote_iter = list(re.finditer(r'"([^"]*)"', inner_text))
+            quoted_parts = [qm.group(1) for qm in quote_iter]
 
-            # 检查是否有英文引号 "" 内的内容
-            quote_match = re.findall(r'"([^"]*)"', inner_text)
-
-            if quote_match:
-                # 有引号：引号内容作为角色对话
-                # 引号外的内容作为旁白
-                # 提取引号前的描述文字
-                before_quotes_end = 0
-                quoted_parts = []
-                for qm in re.finditer(r'"([^"]*)"', inner_text):
-                    # 引号前的文字
-                    before = inner_text[before_quotes_end:qm.start()].strip()
-                    if before:
-                        narration_buffer.append(before)
-                    quoted_parts.append(qm.group(1))
-                    before_quotes_end = qm.end()
-
-                # 引号后的文字
-                after_quotes = inner_text[before_quotes_end:].strip()
-                if after_quotes:
-                    narration_buffer.append(after_quotes)
-
-                # 如果有引号内容，flush 旁白缓冲区，然后添加角色对话
-                if quoted_parts:
-                    flush_narration()
-                    for quoted_text in quoted_parts:
-                        if quoted_text.strip():
-                            result.append({
-                                "role": role_name,
-                                "instruct": instruct,
-                                "text": quoted_text.strip(),
-                            })
-                # 如果引号内容为空，则整个内容视为旁白
-                else:
-                    if inner_text.strip():
-                        narration_buffer.append(inner_text.strip())
-            else:
-                # 无引号：整个内容作为角色对话（向后兼容）
+            if quoted_parts:
+                # 有引号：引号内容作为角色对话（多引号不拆散）
+                # 引号外描述性文字 → 独立旁白
+                # 步骤：1) flush开头旁白 2) 添加角色条目(多引号拼合) 3) flush引号后旁白
                 flush_narration()
-                if inner_text:
-                    # 清理markdown代码块
-                    if inner_text.startswith('```'):
-                        inner_text = re.sub(r'^```\w*\n?', '', inner_text)
-                        inner_text = re.sub(r'\n?```$', '', inner_text)
-                        inner_text = inner_text.strip()
+
+                # 收集引号外描述文字（旁白）
+                pre_narration = []
+                post_narration = []
+                # 第一段引号前的描述
+                first_q_start = quote_iter[0].start()
+                if first_q_start > 0:
+                    before = inner_text[:first_q_start].strip()
+                    if before:
+                        pre_narration.append(before)
+                # 最后一段引号后的描述
+                last_q_end = quote_iter[-1].end()
+                last_qm = quote_iter[-1]
+                # 重新获取最后一个引号后的内容
+                after = inner_text[quote_iter[-1].end():].strip()
+                if after:
+                    post_narration.append(after)
+
+                # 输出引号前旁白
+                for nar in pre_narration:
+                    result.append({"role": "旁白", "instruct": "", "text": nar})
+
+                # 输出角色条目：每个引号内容单独一条
+                for qt in quoted_parts:
                     result.append({
                         "role": role_name,
                         "instruct": instruct,
-                        "text": inner_text
+                        "text": qt,
                     })
 
-        # 处理最后剩余的旁白缓冲区
+                # 输出引号后旁白
+                for nar in post_narration:
+                    result.append({"role": "旁白", "instruct": "", "text": nar})
+            else:
+                # 无引号：整体作为 text（向后兼容）
+                flush_narration()
+                text_content = inner_text
+                # 清理markdown代码块
+                if text_content.startswith('```'):
+                    text_content = re.sub(r'^```\w*\n?', '', text_content)
+                    text_content = re.sub(r'\n?```$', '', text_content)
+                    text_content = text_content.strip()
+                if text_content:
+                    result.append({
+                        "role": role_name,
+                        "instruct": instruct,
+                        "text": text_content,
+                    })
+
+        # 处理最后一个标记之后的无标记段落
         flush_narration()
 
         return result
