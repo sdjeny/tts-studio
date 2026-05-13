@@ -128,6 +128,13 @@ function AIGenPanel({ project, onChange, onError }: {
   const [storyArc, setStoryArc] = useState("");
   const [outlineDraft, setOutlineDraft] = useState<Array<{ id: string; title: string; summary: string }>>([]);
   const [genDialoguesFor, setGenDialoguesFor] = useState<string[]>([]);
+  const [selectAllEpisodes, setSelectAllEpisodes] = useState(false);
+
+  // 检查剧集是否已有对白
+  const hasDialogues = (epId: string) => {
+    const ep = project.episodes.find(e => e.id === epId);
+    return ep && ep.dialogues && ep.dialogues.length > 0;
+  };
 
   // 已有剧集时，初始化 outlineDraft
   useEffect(() => {
@@ -177,7 +184,7 @@ function AIGenPanel({ project, onChange, onError }: {
     setLoading(true);
     onError("");
     let total = 0;
-    const epsToGen = genDialoguesFor.length > 0 ? genDialoguesFor : outlineDraft.map(e => e.id);
+    const epsToGen = genDialoguesFor.length > 0 ? genDialoguesFor : (selectAllEpisodes ? outlineDraft.map(e => e.id) : []);
     const errors: string[] = [];
     for (const epId of epsToGen) {
       try {
@@ -601,37 +608,63 @@ function AIGenPanel({ project, onChange, onError }: {
             <div style={{ fontSize: 14, color: "#e2e8f0", marginBottom: 8 }}>
               将为以下 <strong>{outlineDraft.length}</strong> 集生成旁白+对白：
             </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <span style={{ fontSize: 13, color: "#94a3b8" }}>选择剧集</span>
+              <button onClick={() => { setSelectAllEpisodes(true); setGenDialoguesFor(outlineDraft.map(e => e.id)); }}
+                style={{ fontSize: 11, padding: "2px 8px", borderRadius: 4, border: "1px solid #475569", color: "#94a3b8", background: "transparent", cursor: "pointer" }}>
+                全选
+              </button>
+              <button onClick={() => { setSelectAllEpisodes(false); setGenDialoguesFor([]); }}
+                style={{ fontSize: 11, padding: "2px 8px", borderRadius: 4, border: "1px solid #475569", color: "#94a3b8", background: "transparent", cursor: "pointer" }}>
+                清除
+              </button>
+              {genDialoguesFor.length > 0 && (
+                <span style={{ fontSize: 11, color: "#475569" }}>已选 {genDialoguesFor.length} 集</span>
+              )}
+            </div>
             <div style={{ display: "grid", gap: 4 }}>
-              {outlineDraft.map((item, i) => (
+              {outlineDraft.map((item, i) => {
+                const hasDlg = hasDialogues(item.id);
+                const isChecked = selectAllEpisodes || genDialoguesFor.includes(item.id);
+                return (
                 <label key={item.id} style={{
                   display: "flex",
                   alignItems: "center",
                   gap: 8,
                   padding: "4px 8px",
                   borderRadius: 4,
-                  background: genDialoguesFor.includes(item.id) || genDialoguesFor.length === 0 ? "transparent" : "#1e293b",
+                  background: isChecked ? "transparent" : "#1e293b",
                   cursor: "pointer",
-                  opacity: genDialoguesFor.length > 0 && !genDialoguesFor.includes(item.id) ? 0.4 : 1,
+                  opacity: !selectAllEpisodes && genDialoguesFor.length > 0 && !genDialoguesFor.includes(item.id) ? 0.4 : 1,
                 }}>
                   <input
                     type="checkbox"
-                    checked={genDialoguesFor.includes(item.id) || genDialoguesFor.length === 0}
+                    checked={isChecked}
                     onChange={(e) => {
-                      if (e.target.checked) {
-                        setGenDialoguesFor(prev => [...prev, item.id]);
+                      if (selectAllEpisodes) {
+                        // 从全选状态切换：先退出全选，再处理当前项
+                        setSelectAllEpisodes(false);
+                        setGenDialoguesFor(outlineDraft.map(e => e.id).filter(id => id !== item.id));
                       } else {
-                        setGenDialoguesFor(prev => prev.filter(id => id !== item.id));
+                        if (e.target.checked) {
+                          setGenDialoguesFor(prev => [...prev, item.id]);
+                        } else {
+                          setGenDialoguesFor(prev => prev.filter(id => id !== item.id));
+                        }
                       }
                     }}
                     style={{ accentColor: "#a855f7" }}
                   />
                   <span style={{ fontSize: 12, color: "#94a3b8" }}>{i + 1}</span>
                   <span style={{ fontSize: 13, color: "#e2e8f0" }}>{cleanTitle(item.title)}</span>
+                  {hasDlg && (
+                    <span style={{ fontSize: 10, color: "#22c55e", border: "1px solid #22c55e", borderRadius: 3, padding: "0 4px" }}>已生成</span>
+                  )}
                   <span style={{ fontSize: 11, color: "#475569", marginLeft: "auto" }}>
                     {item.summary.replace(/^\[(\w+)\]\s*/, "").slice(0, 40)}...
                   </span>
                 </label>
-              ))}
+              );})}
             </div>
           </div>
 

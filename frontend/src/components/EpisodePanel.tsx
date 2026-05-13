@@ -31,7 +31,6 @@ export default function EpisodePanel({ project, onChange, onError }: {
   const [batchOldName, setBatchOldName] = useState("");
   const [batchNewName, setBatchNewName] = useState("");
   const [batchEpIds, setBatchEpIds] = useState<Set<string>>(new Set());
-  const [genProgress, setGenProgress] = useState<{ current: number; total: number; status: string } | null>(null);
 
   const add = async () => {
     if (!title.trim()) return;
@@ -391,51 +390,6 @@ export default function EpisodePanel({ project, onChange, onError }: {
                   </div>
 
                   <div style={{ display: "flex", gap: 6, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
-                    {/* 自动对白 */}
-                    <button
-                      onClick={async () => {
-                        if (!ep.summary) { onError("请先填写剧集摘要"); return; }
-                        if (!confirm("根据摘要自动生成对白？已有对白不会被删除。")) return;
-                        setGenProgress({ current: 0, total: 0, status: "规划中..." });
-                        try {
-                          await api.generateDialoguesStream(
-                            project.id, ep.id, "",
-                            25, 50,
-                            (event, data) => {
-                              if (event === "planning") {
-                                setGenProgress({ current: 0, total: data.total, status: "规划中..." });
-                              } else if (event === "scene_start") {
-                                setGenProgress(prev => ({ ...prev!, status: "正在生成第 " + (data.index + 1) + " 幕..." }));
-                              } else if (event === "progress") {
-                                setGenProgress({ current: data.current, total: data.total, status: "生成中" });
-                              } else if (event === "new_characters") {
-                                onError("新增角色: " + data.names.join(", "));
-                              } else if (event === "complete") {
-                                setGenProgress(null);
-                                onChange();
-                                const nc = data.new_characters.length > 0 ? "，新增角色: " + data.new_characters.join(", ") : "";
-                                onError("已生成 " + data.created + " 条对白" + nc);
-                              } else if (event === "error") {
-                                setGenProgress(null);
-                                onError("生成失败: " + data.message);
-                              }
-                            }
-                          );
-                        } catch (e: any) {
-                          setGenProgress(null);
-                          onError(e.message);
-                        }
-                      }}
-                      disabled={genProgress !== null}
-                      style={{ ...smallBtn, color: genProgress !== null ? "#666" : "#a855f7", borderColor: genProgress !== null ? "#666" : "#a855f7" }}
-                    >{genProgress !== null ? "⏳ 生成中..." : "✨ 自动对白"}</button>
-                    {genProgress !== null && (
-                      <span style={{ fontSize: 12, color: "#a855f7", marginLeft: 4 }}>
-                        {genProgress.status} {genProgress.total > 0 ? genProgress.current + "/" + genProgress.total : ""}
-                      </span>
-                    )}
-
-                    {/* 生成全部 + 模式选择 */}
                     <div style={{ display: "flex", gap: 0, alignItems: "center" }}>
                       <button onClick={() => batchGenerate(ep)} style={{ ...smallBtn, color: "#22c55e", borderColor: "#22c55e", borderRadius: "4px 0 0 4px" }}>
                         🔊 生成全部音频
