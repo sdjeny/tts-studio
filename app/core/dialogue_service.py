@@ -7,7 +7,7 @@ from difflib import SequenceMatcher
 
 from app.core.llm import chat_json, get_llm_config
 from app.core.store import (
-    get_project, get_episode, add_dialogue, add_character,
+    get_project, get_episode, add_dialogue, add_character, update_episode,
 )
 
 # TTS 服务支持的音色列表（与 episodes.py 中 _VALID_VOICES 保持一致）
@@ -282,6 +282,11 @@ class DialogueGenerator:
 
         sys.stderr.write(f"  [B2-STORY] raw text length={len(story_text)}\n")
         sys.stderr.flush()
+
+        # T3: 保存 raw_text 到 episode（在解析之前保存原始文本）
+        update_episode(self.project_id, self.episode_id, raw_text=story_text)
+        # 同步更新 self.ep 中的 raw_text，避免后续使用旧缓存
+        self.ep["raw_text"] = story_text
 
         # T1: 解析故事文本
         parsed = self._parse_story_text(story_text)
