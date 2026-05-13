@@ -233,16 +233,7 @@ class DialogueGenerator:
 
         # T4: 构建 prompt
         system = f"""你是一个有声故事编剧。根据摘要生成一个完整的故事。
-
-【输出格式】
-每段开头用[]标注角色名，旁白标[旁白]，对话用[角色名]。
-对话/独白必须在括号里标注情绪，如：[小明]（低声）...[小红]（兴奋）...
-旁白不标注情绪。
-
-【字数控制】
 总字数约{word_count}字（允许±20%浮动）。
-
-【旁白占比】
 旁白约占{narration_ratio}%。
 {style_prompt}
 
@@ -296,20 +287,26 @@ class DialogueGenerator:
         # 同步更新 self.ep 中的 raw_text，避免后续使用旧缓存
         self.ep["raw_text"] = story_text
 
-        # T1: 解析故事文本
-        parsed = self._parse_story_text(story_text)
-        if not parsed:
+        # T1: 调用两步解析器
+        from app.core.dialogue_parser import parse_story_with_two_step
+
+        dialogues = parse_story_with_two_step(
+            story_text,
+            known_chars=[c["name"] for c in chars_info] if chars_info else None
+        )
+
+        if not dialogues:
             yield "error", {"message": "无法解析故事文本，请检查输出格式"}
             return
 
-        yield "story_parsed", {"total_segments": len(parsed)}
+        yield "story_parsed", {"total_segments": len(dialogues)}
 
         # T5: 角色匹配入库
         created = []
         new_chars = []
         new_char_cache: dict = {}
 
-        for idx, item in enumerate(parsed):
+        for idx, item in enumerate(dialogues):
             char_name = item["role"]
             instruct = item["instruct"]
             text = item["text"]
@@ -322,7 +319,7 @@ class DialogueGenerator:
                 dlg = add_dialogue(self.project_id, self.episode_id, char_id, text, idx, instruct)
                 if dlg:
                     created.append(dlg["id"])
-                    yield "progress", {"current": len(created), "total": len(parsed)}
+                    yield "progress", {"current": len(created), "total": len(dialogues)}
 
         # 角色重复校验（复用原有逻辑）
         if new_chars:
@@ -367,7 +364,7 @@ class DialogueGenerator:
             "new_characters": new_chars,
             "_debug": {
                 "word_count": word_count,
-                "parsed_segments": len(parsed),
+                "parsed_segments": len(dialogues),
                 "actual": len(created),
             },
         }
