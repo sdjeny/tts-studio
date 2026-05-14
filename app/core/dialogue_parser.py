@@ -156,7 +156,10 @@ def merge_narration_and_dialogue(
 
     # 旁白
     for n in narrations:
-        all_elements.append({"pos": n["pos"], "type": "narration", "role": "旁白", "instruct": "", "text": n["text"]})
+        # 压缩旁白中的多余空行
+        clean_text = n["text"].replace('\n\n', '\n').strip()
+        if clean_text:
+            all_elements.append({"pos": n["pos"], "type": "narration", "role": "旁白", "instruct": "", "text": clean_text})
 
     # 对白
     for r in role_results:
