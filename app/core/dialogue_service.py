@@ -234,6 +234,7 @@ class DialogueGenerator:
         # T4: 构建 prompt
         system = f"""你是一个有声故事编剧。根据摘要生成一个完整的故事。
 总字数约{word_count}字（允许±20%浮动）。
+旁白约占{narration_ratio}%。
 {style_prompt}
 
 【对话格式】
