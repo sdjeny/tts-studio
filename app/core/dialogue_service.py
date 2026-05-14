@@ -234,7 +234,6 @@ class DialogueGenerator:
         # T4: 构建 prompt
         system = f"""你是一个有声故事编剧。根据摘要生成一个完整的故事。
 总字数约{word_count}字（允许±20%浮动）。
-旁白约占{narration_ratio}%。
 {style_prompt}
 
 【对话格式】
@@ -306,9 +305,11 @@ class DialogueGenerator:
         # T1: 调用两步解析器
         from app.core.dialogue_parser import parse_story_with_two_step
 
+        base_chars = [c.split(" (")[0].lstrip("- ") for c in chars_info if "旁白" not in c] if chars_info else []
+
         dialogues = parse_story_with_two_step(
             story_text,
-            known_chars=[c.split(" (")[0].lstrip("- ") for c in chars_info] if chars_info else None
+            known_chars=base_chars
         )
 
         if not dialogues:
