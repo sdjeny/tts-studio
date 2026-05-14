@@ -2,7 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
-## [未发布] Issue #23 — 修复对白解析逻辑
+## [未发布] Issue #32 — 对话符号从「」切换到『』
+
+### Changed
+- `dialogue_service.py` prompt 中的对话引号示例从「」切换为『』（fix #32）
+  - 原因：「」在训练数据中常用于标注名词，LLM 误用率 2.4%；『』误用率 0.0%
+  - `dialogue_parser.py` extract_dialogues() 已支持『』提取，无需改动
+  - 旧数据兼容：extract_dialogues() 同时支持「」和『』
 
 ### Fixed
 - `_parse_story_text()` 重写 — 引号感知解析（fix #23）
