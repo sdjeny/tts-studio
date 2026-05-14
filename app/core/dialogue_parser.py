@@ -11,9 +11,9 @@ import urllib.request
 def extract_dialogues(text: str) -> List[Dict[str, int]]:
     """
     提取所有引号对白，返回含起止位置。
-    覆盖：中文双引号 "" / 英文双引号 " / 日式引号 「」
+    覆盖：中文双引号 "" / 英文双引号 " / 直角引号 『』
     """
-    pattern = re.compile(r'[\u201c""\u201d''\u300c\u300d][^\u201c""\u201d''\u300c\u300d]*[\u201c""\u201d''\u300c\u300d]')
+    pattern = re.compile(r'[\u201c""\u201d''\u300e\u300f][^\u201c""\u201d''\u300e\u300f]*[\u201c""\u201d''\u300e\u300f]')
     results = []
     for m in pattern.finditer(text):
         inner = m.group()[1:-1].strip()
