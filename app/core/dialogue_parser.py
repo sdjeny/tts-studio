@@ -78,6 +78,8 @@ def parse_dialogues_with_llm(
         api_key = "sk-octopus-rnY79KRKMQ8Afl38QNbZwzparD4FR6TPJcE2TTgtU9bk0yuv"
     if not model:
         model = "lite2"
+
+    # api_url 已经是完整路径，直接用
     items = "\n".join(f"对白 {i}：{d['inner']}" for i, d in enumerate(dialogues))
     chars_str = f"\n【已知角色】：{', '.join(known_chars)}" if known_chars else ""
     prompt = f"""判断以下每段对白是谁说的。
