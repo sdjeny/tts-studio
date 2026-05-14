@@ -12,14 +12,22 @@ def extract_dialogues(text: str) -> List[Dict[str, int]]:
     """
     提取所有引号对白，返回含起止位置。
     覆盖：中文双引号 "" / 英文双引号 " / 日式引号 「」
+    过滤：纯名词引号（如「天梯」「逆风号」）——前面无冒号且长度≤4 的跳过
     """
     pattern = re.compile(r'[\u201c""\u201d''\u300c\u300d][^\u201c""\u201d''\u300c\u300d]*[\u201c""\u201d''\u300c\u300d]')
     results = []
     for m in pattern.finditer(text):
+        inner = m.group()[1:-1]  # 不含引号
+        # 过滤短名词引号：长度≤4 且前面没有冒号/空格引导
+        if len(inner) <= 4:
+            # 检查前面2个字符是否有冒号（全角或半角）
+            prefix = text[max(0, m.start()-2):m.start()]
+            if ':' not in prefix and '：' not in prefix:
+                continue
         results.append({
             "start": m.start(),
             "end": m.end(),
-            "inner": m.group()[1:-1]  # 不含引号
+            "inner": inner
         })
     return results
 
