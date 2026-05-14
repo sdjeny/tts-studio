@@ -306,9 +306,11 @@ class DialogueGenerator:
         # T1: 调用两步解析器
         from app.core.dialogue_parser import parse_story_with_two_step
 
+        base_chars = [c.split(" (")[0].lstrip("- ") for c in chars_info if "旁白" not in c] if chars_info else []
+
         dialogues = parse_story_with_two_step(
             story_text,
-            known_chars=[c.split(" (")[0].lstrip("- ") for c in chars_info] if chars_info else None
+            known_chars=base_chars
         )
 
         if not dialogues:
