@@ -63,14 +63,21 @@ def parse_dialogues_with_llm(
     dialogues: List[Dict[str, int]],
     story_text: str,
     known_chars: Optional[List[str]] = None,
-    api_url: str = "http://192.168.0.77:7878/v1/chat/completions",
-    api_key: str = "sk-octopus-rnY79KRKMQ8Afl38QNbZwzparD4FR6TPJcE2TTgtU9bk0yuv",
-    model: str = "lite2",
+    api_url: Optional[str] = None,
+    api_key: Optional[str] = None,
+    model: Optional[str] = None,
     max_tokens: int = 12000
 ) -> List[Dict[str, str]]:
     """
     LLM 解析对白角色，返回 [{idx, role, instruct}, ...]
     """
+    # fallback 到 lite2（测试用）
+    if not api_url:
+        api_url = "http://192.168.0.77:7878/v1/chat/completions"
+    if not api_key:
+        api_key = "sk-octopus-rnY79KRKMQ8Afl38QNbZwzparD4FR6TPJcE2TTgtU9bk0yuv"
+    if not model:
+        model = "lite2"
     items = "\n".join(f"对白 {i}：{d['inner']}" for i, d in enumerate(dialogues))
     chars_str = f"\n【已知角色】：{', '.join(known_chars)}" if known_chars else ""
     prompt = f"""判断以下每段对白是谁说的。
@@ -162,7 +169,8 @@ def merge_narration_and_dialogue(
 
 def parse_story_with_two_step(
     story_text: str,
-    known_chars: Optional[List[str]] = None
+    known_chars: Optional[List[str]] = None,
+    llm_cfg: Optional[Dict] = None
 ) -> List[Dict[str, str]]:
     """
     两步解析主流程：
@@ -177,7 +185,10 @@ def parse_story_with_two_step(
     role_results = parse_dialogues_with_llm(
         dialogues,
         story_text,
-        known_chars=known_chars
+        known_chars=known_chars,
+        api_url=llm_cfg.get("base_url") if llm_cfg else None,
+        api_key=llm_cfg.get("api_key") if llm_cfg else None,
+        model=llm_cfg.get("model") if llm_cfg else None,
     )
 
     # 步骤3：合并旁白 + 对白

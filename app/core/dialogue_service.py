@@ -310,7 +310,8 @@ class DialogueGenerator:
 
         dialogues = parse_story_with_two_step(
             story_text,
-            known_chars=base_chars
+            known_chars=base_chars,
+            llm_cfg=llm_cfg
         )
 
         if not dialogues:
