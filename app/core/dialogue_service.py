@@ -284,7 +284,12 @@ class DialogueGenerator:
             yield "error", {"message": "LLM 返回空故事文本"}
             return
 
-        sys.stderr.write(f"  [B2-STORY] raw text length={len(story_text)}\n")
+        # 清理标题行（# 标题）和多余空行
+        story_text = _re.sub(r'^#\s+.*\n', '', story_text)
+        story_text = _re.sub(r'\n{3,}', '\n\n', story_text)
+        story_text = story_text.strip()
+
+        sys.stderr.write(f"  [B2-STORY] raw text length={len(story_text)}\\n")
         sys.stderr.flush()
 
         # T3: 保存 raw_text 到 episode（在解析之前保存原始文本）

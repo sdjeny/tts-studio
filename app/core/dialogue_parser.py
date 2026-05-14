@@ -16,10 +16,13 @@ def extract_dialogues(text: str) -> List[Dict[str, int]]:
     pattern = re.compile(r'[\u201c""\u201d''\u300c\u300d][^\u201c""\u201d''\u300c\u300d]*[\u201c""\u201d''\u300c\u300d]')
     results = []
     for m in pattern.finditer(text):
+        inner = m.group()[1:-1].strip()
+        if not inner:
+            continue
         results.append({
             "start": m.start(),
             "end": m.end(),
-            "inner": m.group()[1:-1]  # 不含引号
+            "inner": inner
         })
     return results
 
