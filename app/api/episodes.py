@@ -1369,16 +1369,23 @@ async def api_generate_episodes(project_id: str, body: EpisodeGenRequest):
 
 @router.post("/projects/{project_id}/episodes/{episode_id}/generate-dialogues")
 async def api_generate_dialogues(project_id: str, episode_id: str, body: DialogueGenRequest):
-    """用 LLM 根据剧集摘要生成完整故事文本（方案B-2），解析后入库。SSE 流式返回。"""
-    from app.core.dialogue_service import DialogueGenerator
+    """用 LLM 根据剧集摘要生成完整故事文本（方案B-2），解析后入库。
+    改为后台任务模式，立即返回 task_id，前端轮询 /generation-status 获取进度。"""
+    from app.core.store import init_generation_task
+    from app.core.dialogue_service import run_dialogue_generation
 
-    async def sse_stream():
-        import json as _sse_json
-        gen = DialogueGenerator(project_id, episode_id, body)
-        async for event_type, data in gen._generate_story():
-            yield f"event: {event_type}\ndata: {_sse_json.dumps(data, ensure_ascii=False)}\n\n".encode("utf-8")
+    # 1. 初始化任务记录
+    task_id = init_generation_task(project_id, episode_id, "dialogue_generation")
 
-    return StreamingResponse(sse_stream(), media_type="text/event-stream")
+    # 2. 启动后台任务
+    asyncio.create_task(run_dialogue_generation(project_id, episode_id, body, task_id))
+
+    # 3. 立即返回
+    return JSONResponse({
+        "task_id": task_id,
+        "status": "running",
+        "episode_id": episode_id,
+    })
 
 @router.get("/projects/{project_id}/generation-status")
 async def api_get_generation_status(project_id: str, episode_id: str = None):

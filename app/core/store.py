@@ -844,3 +844,44 @@ def get_generation_task(project_id: str, episode_id: str = None,
             candidates.sort(key=lambda t: t.get("updated_at", ""), reverse=True)
             return candidates[0]
     return None
+
+
+def cancel_generation_task(project_id: str, task_id: str) -> bool:
+    """取消一个正在运行的任务。将状态标记为 cancelled。"""
+    data = _read()
+    for p in data["projects"]:
+        if p["id"] == project_id:
+            if task_id in p.get("generation_tasks", {}):
+                p["generation_tasks"][task_id]["status"] = "cancelled"
+                p["generation_tasks"][task_id]["updated_at"] = _now()
+                _write(data)
+                return True
+    return False
+
+
+def list_generation_tasks(project_id: str, episode_id: str = None,
+                          status: str = None) -> list[dict]:
+    """列出项目的生成任务，按 updated_at 降序排列。
+
+    Args:
+        project_id: 项目 ID
+        episode_id: 可选，按剧集过滤
+        status: 可选，按状态过滤（running/complete/error/cancelled）
+
+    Returns:
+        任务列表，按更新时间降序
+    """
+    data = _read()
+    for p in data["projects"]:
+        if p["id"] == project_id:
+            tasks = p.get("generation_tasks", {})
+            result = []
+            for tid, t in tasks.items():
+                if episode_id and t.get("episode_id") != episode_id:
+                    continue
+                if status and t.get("status") != status:
+                    continue
+                result.append(t)
+            result.sort(key=lambda t: t.get("updated_at", ""), reverse=True)
+            return result
+    return []
