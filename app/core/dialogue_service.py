@@ -705,3 +705,41 @@ class DialogueGenerator:
                 "actual": len(dialogues_data),
             },
         }
+
+
+async def run_dialogue_generation(project_id: str, episode_id: str, body, task_id: str):
+    """后台任务包装函数：消费 DialogueGenerator 的 async generator，
+    将 yield 事件映射为 store.update_generation_task() 调用。
+
+    这样 DialogueGenerator 本身零改动，所有 yield 事件被消费并持久化到 store。
+    """
+    from app.core.store import update_generation_task
+
+    gen = DialogueGenerator(project_id, episode_id, body)
+    throttle_counter = 0
+    try:
+        async for event_type, data in gen._generate_story():
+            if event_type == "error":
+                update_generation_task(project_id, task_id,
+                    status="error", error=data.get("message", "未知错误"))
+                return
+            elif event_type == "progress":
+                # 节流更新：每 5 条更新一次，避免高频 JSON 写入
+                throttle_counter += 1
+                if throttle_counter % 5 == 0:
+                    update_generation_task(project_id, task_id,
+                        current=data.get("current", 0), total=data.get("total", 0))
+            elif event_type == "complete":
+                # 完成事件：标记 complete，携带结果数据
+                update_generation_task(project_id, task_id,
+                    status="complete", current=data.get("created", 0),
+                    total=data.get("created", 0), result=data)
+                return
+            elif event_type in ("generating", "story_parsed", "scene_start", "planning", "new_characters"):
+                # 中间状态事件：更新状态描述
+                update_generation_task(project_id, task_id,
+                    status=f"running:{event_type}", extra=data)
+    except Exception as e:
+        import traceback
+        update_generation_task(project_id, task_id,
+            status="error", error=f"后台任务异常: {e}\n{traceback.format_exc()}")
