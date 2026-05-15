@@ -183,13 +183,11 @@ function AIGenPanel({ project, onChange, onError }: {
   const generateAllDialogues = async () => {
     setLoading(true);
     onError("");
-    let total = 0;
     const epsToGen = genDialoguesFor.length > 0 ? genDialoguesFor : (selectAllEpisodes ? outlineDraft.map(e => e.id) : []);
     const errors: string[] = [];
     for (const epId of epsToGen) {
       try {
-        const r = await api.generateDialogues(project.id, epId, "", targetDuration, narrationRatio);
-        total += r.created;
+        await api.generateDialogues(project.id, epId, "", targetDuration, narrationRatio);
       } catch (e: any) {
         errors.push(e.message);
       }
@@ -197,9 +195,9 @@ function AIGenPanel({ project, onChange, onError }: {
     onChange();
     setStep("outline");
     if (errors.length > 0) {
-      onError(`✅ 已为部分剧集生成共 ${total} 条旁白/对白（${errors.length} 集失败）`);
+      onError(`✅ 已提交 ${epsToGen.length - errors.length} 集生成任务（${errors.length} 集失败，请重试）`);
     } else {
-      onError(`✅ 已为 ${epsToGen.length} 集生成共 ${total} 条旁白/对白`);
+      onError(`✅ 已提交 ${epsToGen.length} 集生成任务，后台处理中`);
     }
     setLoading(false);
   };
