@@ -745,3 +745,97 @@ async def run_dialogue_generation(project_id: str, episode_id: str, body, task_i
         import traceback
         update_generation_task(project_id, task_id,
             status="error", error=f"后台任务异常: {e}\n{traceback.format_exc()}")
+
+
+async def run_batch_refresh(project_id: str, episode_id: str, dialogue_ids: list[str], task_id: str):
+    """后台批量刷新对白状态（原 SSE 流式逻辑，改为通过 update_generation_task 更新进度）。"""
+    from app.core.store import update_generation_task
+    from app.api.episodes import get_episode, _refresh_single_dialogue
+    try:
+        ep = get_episode(project_id, episode_id)
+        if not ep:
+            update_generation_task(project_id, task_id, status="error", error="Episode not found")
+            return
+        ok = 0
+        fail = 0
+        for i, dlg_id in enumerate(dialogue_ids):
+            try:
+                _dlg = None
+                for d in ep["dialogues"]:
+                    if d["id"] == dlg_id:
+                        _dlg = d
+                        break
+                if not _dlg:
+                    fail += 1
+                    update_generation_task(project_id, task_id, current=i + 1)
+                    continue
+                await _refresh_single_dialogue(project_id, episode_id, _dlg)
+                ok += 1
+                update_generation_task(project_id, task_id, current=i + 1)
+            except Exception as e:
+                fail += 1
+                update_generation_task(project_id, task_id, current=i + 1)
+        update_generation_task(project_id, task_id, status="complete", current=ok + fail)
+    except Exception as e:
+        update_generation_task(project_id, task_id, status="error", error=str(e))
+
+
+async def run_batch_generate(project_id: str, episode_id: str, dialogue_ids: list[str], task_id: str):
+    """后台批量提交 TTS 任务（原 SSE 流式逻辑，改为通过 update_generation_task 更新进度）。"""
+    from app.core.store import update_generation_task
+    from app.api.episodes import get_episode, get_project, _resolve_dialogue_tts_params, _download_and_save
+    from app.api.episodes import submit_tts
+    import uuid
+    import asyncio
+    try:
+        ep = get_episode(project_id, episode_id)
+        proj = get_project(project_id)
+        if not ep or not proj:
+            update_generation_task(project_id, task_id, status="error", error="Episode or project not found")
+            return
+        submitted = 0
+        failed_list = []
+        for i, dlg_id in enumerate(dialogue_ids):
+            dlg = None
+            for d in ep["dialogues"]:
+                if d["id"] == dlg_id:
+                    dlg = d
+                    break
+            if not dlg:
+                failed_list.append(dlg_id)
+                update_generation_task(project_id, task_id, current=i + 1)
+                continue
+            try:
+                tts_kwargs = _resolve_dialogue_tts_params(project_id, dlg, proj)
+                task_id_inner = await submit_tts(**tts_kwargs)
+                submitted += 1
+                placeholder_id = f"gen_{uuid.uuid4().hex[:8]}"
+                from app.core import store
+                async with store.atomic_update() as data:
+                    for p in data["projects"]:
+                        if p["id"] == project_id:
+                            for ep_in in p["episodes"]:
+                                if ep_in["id"] == episode_id:
+                                    for d in ep_in["dialogues"]:
+                                        if d["id"] == dlg_id:
+                                            from datetime import datetime
+                                            d["audio_history"].append({
+                                                "id": placeholder_id,
+                                                "url": "",
+                                                "filename": "",
+                                                "created_at": datetime.now().isoformat(),
+                                                "status": "generating",
+                                                "task_id": task_id_inner,
+                                            })
+                                            d["current_audio_id"] = placeholder_id
+                                            d["status"] = "generating"
+                                    break
+                            break
+                asyncio.create_task(_download_and_save(project_id, episode_id, dlg_id, task_id_inner, placeholder_id))
+                update_generation_task(project_id, task_id, current=submitted + len(failed_list))
+            except Exception as e:
+                failed_list.append(dlg_id)
+                update_generation_task(project_id, task_id, current=submitted + len(failed_list))
+        update_generation_task(project_id, task_id, status="complete", current=submitted + len(failed_list))
+    except Exception as e:
+        update_generation_task(project_id, task_id, status="error", error=str(e))
