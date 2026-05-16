@@ -74,6 +74,7 @@ export default function ProjectSettings({ project, onChange, onError }: Props) {
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [globalDefaults, setGlobalDefaults] = useState<TtsDefaults>(CONSERVATIVE_DEFAULTS);
+  const [voices, setVoices] = useState<Array<{ name: string; description: string }>>(VOICE_OPTIONS);
 
   // 项目切换时重置
   useEffect(() => {
@@ -86,6 +87,17 @@ export default function ProjectSettings({ project, onChange, onError }: Props) {
     api.getGlobalDefaults()
       .then(setGlobalDefaults)
       .catch(() => {}); // 失败时使用硬编码 fallback
+  }, []);
+
+  // 从 API 动态加载音色列表
+  const loadVoices = () => {
+    api.listVoices()
+      .then(v => setVoices(v.voices))
+      .catch(() => {}); // fallback to VOICE_OPTIONS
+  };
+
+  useEffect(() => {
+    loadVoices();
   }, []);
 
   const updateField = (field: keyof TtsDefaults, val: number | boolean | string) => {
@@ -184,20 +196,34 @@ export default function ProjectSettings({ project, onChange, onError }: Props) {
         <div style={{ fontSize: 11, color: "#64748b", marginBottom: 8 }}>
           项目级默认音色，对白生成时未指定音色则使用此值。
         </div>
-        <select
-          value={values.voice_id}
-          onChange={(e) => updateField("voice_id", e.target.value)}
-          style={{
-            width: "100%", padding: "8px 10px",
-            background: "#1e293b", color: "#e2e8f0",
-            border: "1px solid #334155", borderRadius: 6,
-            fontSize: 13, cursor: "pointer",
-          }}
-        >
-          {VOICE_OPTIONS.map((v) => (
-            <option key={v.name} value={v.name}>{v.name}</option>
-          ))}
-        </select>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <select
+            value={values.voice_id}
+            onChange={(e) => updateField("voice_id", e.target.value)}
+            style={{
+              flex: 1, padding: "8px 10px",
+              background: "#1e293b", color: "#e2e8f0",
+              border: "1px solid #334155", borderRadius: 6,
+              fontSize: 13, cursor: "pointer",
+            }}
+          >
+            {voices.map((v) => (
+              <option key={v.name} value={v.name}>{v.name} - {v.description}</option>
+            ))}
+          </select>
+          <button
+            onClick={loadVoices}
+            title="刷新音色列表"
+            style={{
+              background: "#1e293b", color: "#94a3b8",
+              border: "1px solid #334155", borderRadius: 6,
+              padding: "8px 10px", cursor: "pointer",
+              fontSize: 14, lineHeight: 1,
+            }}
+          >
+            🔄
+          </button>
+        </div>
       </div>
 
       {/* 各参数滑块 */}
