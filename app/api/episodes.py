@@ -539,56 +539,16 @@ class BatchRefreshRequest(BaseModel):
 
 @router.post("/projects/{project_id}/episodes/{episode_id}/refresh-batch")
 async def api_batch_refresh_dialogues(project_id: str, episode_id: str, body: BatchRefreshRequest):
-    """批量刷新对白状态，SSE 流式返回每条进度。"""
-    from fastapi.responses import StreamingResponse
-    import json as _json
-
+    """批量刷新对白状态，后台任务模式。"""
     ep = get_episode(project_id, episode_id)
     if not ep:
         raise HTTPException(404, "Episode not found")
-
     total = len(body.dialogue_ids)
-
-    from app.core.store import init_generation_task, update_generation_task
+    from app.core.store import init_generation_task
+    from app.core.dialogue_service import run_batch_refresh
     task_id = init_generation_task(project_id, episode_id, "refresh", total=total)
-
-    async def _stream():
-        ok = 0
-        fail = 0
-        try:
-            for i, dlg_id in enumerate(body.dialogue_ids):
-                try:
-                    # 调用单条 refresh 逻辑（直接内联，避免重复 HTTP 调用）
-                    _dlg = None
-                    for d in ep["dialogues"]:
-                        if d["id"] == dlg_id:
-                            _dlg = d
-                            break
-                    if not _dlg:
-                        fail += 1
-                        yield f"data: {_json.dumps({'index': i, 'total': total, 'status': 'error', 'error': '对白不存在'}, ensure_ascii=False)}\n\n"
-                        continue
-
-                    # 复用 api_refresh_dialogue 的核心逻辑
-                    await _refresh_single_dialogue(project_id, episode_id, _dlg)
-                    ok += 1
-                    update_generation_task(project_id, task_id, current=i + 1)
-                    yield f"data: {_json.dumps({'index': i, 'total': total, 'status': 'ok'}, ensure_ascii=False)}\n\n"
-                except Exception as e:
-                    fail += 1
-                    yield f"data: {_json.dumps({'index': i, 'total': total, 'status': 'error', 'error': str(e)}, ensure_ascii=False)}\n\n"
-
-            update_generation_task(project_id, task_id, status="complete", current=ok + fail)
-            yield f"data: {_json.dumps({'status': 'done', 'total': total, 'ok': ok, 'failed_count': fail}, ensure_ascii=False)}\n\n"
-        except Exception as e:
-            update_generation_task(project_id, task_id, status="error", error=str(e))
-            raise
-
-    return StreamingResponse(
-        _stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    asyncio.create_task(run_batch_refresh(project_id, episode_id, body.dialogue_ids, task_id))
+    return JSONResponse({"task_id": task_id, "status": "running", "episode_id": episode_id, "total": total})
 
 
 async def _refresh_single_dialogue(project_id: str, episode_id: str, dlg: dict):
@@ -728,10 +688,7 @@ async def _refresh_single_dialogue(project_id: str, episode_id: str, dlg: dict):
 
 @router.post("/projects/{project_id}/episodes/{episode_id}/generate-batch")
 async def api_generate_batch_audio(project_id: str, episode_id: str, body: BatchAudioRequest):
-    """批量提交所有对白的 TTS 任务，SSE 流式返回每条进度，不等下载完成。"""
-    from fastapi.responses import StreamingResponse
-    import json as _json
-
+    """批量提交所有对白的 TTS 任务，后台任务模式。"""
     ep = get_episode(project_id, episode_id)
     if not ep:
         raise HTTPException(404, "Episode not found")
@@ -742,82 +699,11 @@ async def api_generate_batch_audio(project_id: str, episode_id: str, body: Batch
 
     total = len(body.dialogue_ids)
 
-    from app.core.store import init_generation_task, update_generation_task
+    from app.core.store import init_generation_task
+    from app.core.dialogue_service import run_batch_generate
     task_id = init_generation_task(project_id, episode_id, "generate_batch", total=total)
-
-    async def _stream():
-        submitted = 0
-        failed_list = []
-        try:
-            for i, dlg_id in enumerate(body.dialogue_ids):
-                # 查找对白
-                dlg = None
-                for d in ep["dialogues"]:
-                    if d["id"] == dlg_id:
-                        dlg = d
-                        break
-
-                if not dlg:
-                    msg = _json.dumps({"index": i, "total": total, "dialogue_id": dlg_id, "status": "error", "error": "对白不存在"}, ensure_ascii=False)
-                    yield f"data: {msg}\n\n"
-                    failed_list.append(dlg_id)
-                    continue
-
-                try:
-                    # 统一解析 TTS 参数（与单条路径共用同一函数，确保行为一致）
-                    tts_kwargs = _resolve_dialogue_tts_params(project_id, dlg, proj)
-                    task_id_inner = await submit_tts(**tts_kwargs)
-                    submitted += 1
-
-                    # 写回 store：创建占位记录
-                    placeholder_id = f"gen_{uuid.uuid4().hex[:8]}"
-                    async with store.atomic_update() as data:
-                        for p in data["projects"]:
-                            if p["id"] == project_id:
-                                for ep_in in p["episodes"]:
-                                    if ep_in["id"] == episode_id:
-                                        for d in ep_in["dialogues"]:
-                                            if d["id"] == dlg_id:
-                                                d["audio_history"].append({
-                                                    "id": placeholder_id,
-                                                    "url": "",
-                                                    "filename": "",
-                                                    "created_at": _now(),
-                                                    "status": "generating",
-                                                    "task_id": task_id_inner,
-                                                })
-                                                d["current_audio_id"] = placeholder_id
-                                                d["status"] = "generating"
-                                        break
-                                break
-
-                    # 启动后台下载（不等完成）
-                    asyncio.create_task(
-                        _download_and_save(project_id, episode_id, dlg_id, task_id_inner, placeholder_id)
-                    )
-
-                    update_generation_task(project_id, task_id, current=submitted + len(failed_list))
-                    msg = _json.dumps({"index": i, "total": total, "dialogue_id": dlg_id, "status": "submitted", "task_id": task_id_inner}, ensure_ascii=False)
-                    yield f"data: {msg}\n\n"
-
-                except Exception as e:
-                    msg = _json.dumps({"index": i, "total": total, "dialogue_id": dlg_id, "status": "error", "error": str(e)}, ensure_ascii=False)
-                    yield f"data: {msg}\n\n"
-                    failed_list.append(dlg_id)
-
-            update_generation_task(project_id, task_id, status="complete", current=submitted + len(failed_list))
-            # 发送汇总
-            summary = _json.dumps({"status": "done", "total": total, "submitted": submitted, "failed_count": len(failed_list)}, ensure_ascii=False)
-            yield f"data: {summary}\n\n"
-        except Exception as e:
-            update_generation_task(project_id, task_id, status="error", error=str(e))
-            raise
-
-    return StreamingResponse(
-        _stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    asyncio.create_task(run_batch_generate(project_id, episode_id, body.dialogue_ids, task_id))
+    return JSONResponse({"task_id": task_id, "status": "running", "episode_id": episode_id, "total": total})
 
 
 @router.delete("/projects/{project_id}/episodes/{episode_id}/dialogues/{dialogue_id}/history")
