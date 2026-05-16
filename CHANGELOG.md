@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [未发布] Issue #45 — _build_chars_info 过滤旁白角色
+
+### Fixed
+- `app/core/dialogue_service.py` `_build_chars_info()` 新增旁白过滤，跳过名为"旁白"的角色（Refs #45）
+  - 避免LLM在prompt中看到"旁白"作为一个真实角色
+  - 两步解析器处的过滤（line 314）保留作为双重保障
+
 ## [未发布] Issue #32 — 对话符号从「」切换到『』
 
 ### Changed

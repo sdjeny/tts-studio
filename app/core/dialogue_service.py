@@ -23,6 +23,8 @@ def _build_chars_info(proj: dict, detailed: bool = False) -> list[str]:
     chars = list(proj.get("characters", []))
     result = []
     for c in chars:
+        if c.get("name", "").strip() == "旁白":
+            continue
         if detailed:
             base_instruct = c.get("base_instruct", "")
             desc = c.get("description", "无")
