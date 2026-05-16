@@ -92,7 +92,17 @@ else:
 
 ```python
 chars = list(proj.get("characters", []))
+result = []
+for c in chars:
+    if c.get("name", "").strip() == "旁白":
+        continue  # 跳过旁白角色，避免注入LLM prompt
+    ...
 ```
+
+注意：
+- `_build_chars_info` 同时在 `app/core/dialogue_service.py` 和 `app/api/episodes.py` 中有实现，两者都包含旁白过滤逻辑
+- 两步解析器处（`dialogue_service.py` line 314）另有 `if "旁白" not in c` 过滤作为双重保障
+- 旁白仍然作为角色存在于项目角色列表中（用于TTS合成和前端展示），只是不在LLM prompt中出现
 
 ## 批量生成音频（SSE 流式进度）
 
