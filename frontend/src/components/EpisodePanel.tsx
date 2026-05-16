@@ -87,60 +87,33 @@ export default function EpisodePanel({ project, onChange, onError }: {
     const label = batchMode === "all" ? "全部重新生成" : "仅生成未生成过的";
     if (!confirm(`[${label}] 对 ${targets.length} 条对白生成音频？`)) return;
 
-    // 用 SSE 流式接收进度，不等下载完成
     const dlgIds = targets.map((d: any) => d.id);
-    const body = JSON.stringify({ dialogue_ids: dlgIds });
-    let submitted = 0;
-    let failedCount = 0;
-    let done = false;
-
-    // 先用 fetch 拿到 response body 作为 ReadableStream
-    const resp = await fetch(
-      `/api/projects/${project.id}/episodes/${ep.id}/generate-batch`,
-      { method: "POST", headers: { "Content-Type": "application/json" }, body }
-    );
-    if (!resp.ok) {
-      onError("批量生成请求失败: " + resp.statusText);
-      return;
-    }
-
-    const reader = resp.body!.getReader();
-    const decoder = new TextDecoder();
-    let buf = "";
-
-    while (!done) {
-      const { value, done: streamDone } = await reader.read();
-      if (streamDone) break;
-      buf += decoder.decode(value, { stream: true });
-
-      // 按 SSE 格式解析：每条以 \n\n 分隔
-      const parts = buf.split("\n\n");
-      buf = parts.pop() || ""; // 保留不完整的最后一段
-
-      for (const part of parts) {
-        const line = part.trim();
-        if (!line.startsWith("data: ")) continue;
+    try {
+      const result = await api.generateBatchAudio(project.id, ep.id, dlgIds);
+      onError(`⏳ 已提交 ${result.total} 条 TTS 任务，后台生成中...`);
+      // 轮询进度
+      const pollInterval = setInterval(async () => {
         try {
-          const msg = JSON.parse(line.slice(6));
-          if (msg.status === "submitted") {
-            submitted++;
-            onError(`⏳ 已提交 ${submitted}/${msg.total} 条...`);
-          } else if (msg.status === "error") {
-            failedCount++;
-            onError(`⚠ 第 ${msg.index + 1} 条失败: ${msg.error}`);
-          } else if (msg.status === "done") {
-            done = true;
-            onChange(); // 刷新一次获取最新状态
-            if (failedCount > 0) {
-              onError(`✅ 完成！成功 ${msg.submitted}/${msg.total} 条，${msg.failed_count} 条失败`);
-            } else {
-              onError(`✅ 全部提交成功！${msg.submitted}/${msg.total} 条，后台生成中...`);
-            }
+          const status = await api.getGenerationStatus(project.id);
+          if (status.status === "complete") {
+            clearInterval(pollInterval);
+            onChange();
+            onError(`✅ 全部完成！共 ${status.total || result.total} 条`);
+          } else if (status.status === "error") {
+            clearInterval(pollInterval);
+            onError(`❌ 生成失败: ${status.error}`);
+          } else if (status.current !== undefined && status.total) {
+            onError(`⏳ 进度 ${status.current}/${status.total}...`);
           }
-        } catch {
-          // 忽略解析错误
+        } catch (e: any) {
+          clearInterval(pollInterval);
+          onError(`轮询失败: ${e.message}`);
         }
-      }
+      }, 2000);
+      // 60秒超时
+      setTimeout(() => clearInterval(pollInterval), 60000);
+    } catch (e: any) {
+      onError(`批量生成请求失败: ${e.message}`);
     }
   };
 
@@ -445,58 +418,40 @@ export default function EpisodePanel({ project, onChange, onError }: {
                               onError("");
 
                               const dlgIds = curEp.dialogues.map((d: any) => d.id);
-                              const resp = await api.generateBatchRefresh(project.id, curEp.id, dlgIds);
-                              if (!resp.ok) {
-                                onError("批量刷新请求失败: " + resp.statusText);
+                              try {
+                                const result = await api.generateBatchRefresh(project.id, curEp.id, dlgIds);
+                                setBatchRefreshProgress(prev => ({ ...prev, [curEp.id]: { current: 0, total: result.total, errors: [] } }));
+                                // 轮询进度
+                                const pollInterval = setInterval(async () => {
+                                  try {
+                                    const status = await api.getGenerationStatus(project.id);
+                                    if (status.status === "complete") {
+                                      clearInterval(pollInterval);
+                                      setRefreshing(null);
+                                      setBatchRefreshProgress(prev => { const n = { ...prev }; delete n[curEp.id]; return n; });
+                                      onChange();
+                                      onError(`✅ 全部刷新成功！共 ${status.total || result.total} 条`);
+                                    } else if (status.status === "error") {
+                                      clearInterval(pollInterval);
+                                      setRefreshing(null);
+                                      setBatchRefreshProgress(prev => { const n = { ...prev }; delete n[curEp.id]; return n; });
+                                      onError(`❌ 刷新失败: ${status.error}`);
+                                    } else if (status.current !== undefined && status.total) {
+                                      setBatchRefreshProgress(prev => ({ ...prev, [curEp.id]: { current: status.current!, total: status.total!, errors: [] } }));
+                                    }
+                                  } catch (e: any) {
+                                    clearInterval(pollInterval);
+                                    setRefreshing(null);
+                                    setBatchRefreshProgress(prev => { const n = { ...prev }; delete n[curEp.id]; return n; });
+                                    onError(`轮询失败: ${e.message}`);
+                                  }
+                                }, 2000);
+                                setTimeout(() => clearInterval(pollInterval), 60000);
+                              } catch (e: any) {
                                 setRefreshing(null);
                                 setBatchRefreshProgress(prev => { const n = { ...prev }; delete n[curEp.id]; return n; });
-                                return;
+                                onError(`批量刷新请求失败: ${e.message}`);
                               }
-
-                              const reader = resp.body!.getReader();
-                              const decoder = new TextDecoder();
-                              let buf = "";
-                              let done = false;
-
-                              while (!done) {
-                                const { value, done: streamDone } = await reader.read();
-                                if (streamDone) break;
-                                buf += decoder.decode(value, { stream: true });
-
-                                const parts = buf.split("\n\n");
-                                buf = parts.pop() || "";
-
-                                for (const part of parts) {
-                                  const line = part.trim();
-                                  if (!line.startsWith("data: ")) continue;
-                                  try {
-                                    const msg = JSON.parse(line.slice(6));
-                                    if (msg.status === "ok" || msg.status === "error") {
-                                      setBatchRefreshProgress(prev => ({
-                                        ...prev,
-                                        [curEp.id]: {
-                                          current: msg.index + 1,
-                                          total: msg.total,
-                                          errors: msg.status === "error"
-                                            ? [...(prev[curEp.id]?.errors || []), msg.error]
-                                            : (prev[curEp.id]?.errors || []),
-                                        },
-                                      }));
-                                    } else if (msg.status === "done") {
-                                      done = true;
-                                      onChange();
-                                      if (msg.failed_count > 0) {
-                                        onError(`🔄 刷新完成：${msg.ok}/${msg.total} 条成功，${msg.failed_count} 条失败`);
-                                      } else {
-                                        onError(`✅ 已刷新 ${msg.ok}/${msg.total} 条对白状态`);
-                                      }
-                                    }
-                                  } catch { /* ignore parse errors */ }
-                                }
-                              }
-
-                              setRefreshing(null);
-                              setBatchRefreshProgress(prev => { const n = { ...prev }; delete n[curEp.id]; return n; });
                             }}
                             disabled={!hasGenerating || isRefreshing}
                             title={hasGenerating ? "刷新所有对白的生成状态" : "当前没有进行中的生成任务"}

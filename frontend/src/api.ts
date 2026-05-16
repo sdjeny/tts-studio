@@ -211,9 +211,9 @@ export const api = {
       { method: "POST" }
     ),
 
-  // batch generate audio for all dialogues in an episode
+  // batch generate audio (后台任务模式)
   generateBatchAudio: (pid: string, eid: string, dialogueIds: string[]) =>
-    request<{ total: number; submitted: number; failed: any[] }>(
+    request<{ task_id: string; status: string; episode_id: string; total: number }>(
       `/projects/${pid}/episodes/${eid}/generate-batch`,
       { method: "POST", body: JSON.stringify({ dialogue_ids: dialogueIds }) }
     ),
@@ -225,13 +225,18 @@ export const api = {
       { method: "POST" }
     ),
 
-  // batch refresh dialogues (SSE stream)
+  // batch refresh dialogues (后台任务模式)
   generateBatchRefresh: (pid: string, eid: string, dialogueIds: string[]) =>
-    fetch(`${BASE}/projects/${pid}/episodes/${eid}/refresh-batch`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ dialogue_ids: dialogueIds }),
-    }),
+    request<{ task_id: string; status: string; episode_id: string; total: number }>(
+      `/projects/${pid}/episodes/${eid}/refresh-batch`,
+      { method: "POST", body: JSON.stringify({ dialogue_ids: dialogueIds }) }
+    ),
+
+  // 查询生成任务状态（轮询用）
+  getGenerationStatus: (pid: string, eid?: string) =>
+    request<{ status: string; task_id?: string; current?: number; total?: number; error?: string }>(
+      `/projects/${pid}/generation-status${eid ? `?episode_id=${eid}` : ''}`
+    ),
 
   // clear audio history
   clearAudioHistory: (pid: string, eid: string, dlgId: string) =>
