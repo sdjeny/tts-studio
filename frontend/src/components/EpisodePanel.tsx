@@ -94,13 +94,7 @@ export default function EpisodePanel({ project, onChange, onError }: {
       // 轮询进度
       const pollInterval = setInterval(async () => {
         try {
-          const resp = await fetch(`/api/projects/${project.id}/generation-status`);
-          if (!resp.ok) {
-            clearInterval(pollInterval);
-            onError("轮询请求失败: " + resp.statusText);
-            return;
-          }
-          const status = await resp.json();
+          const status = await api.getGenerationStatus(project.id);
           if (status.status === "complete") {
             clearInterval(pollInterval);
             onChange();
@@ -425,27 +419,12 @@ export default function EpisodePanel({ project, onChange, onError }: {
 
                               const dlgIds = curEp.dialogues.map((d: any) => d.id);
                               try {
-                                const resp = await api.generateBatchRefresh(project.id, curEp.id, dlgIds);
-                                if (!resp.ok) {
-                                  onError("批量刷新请求失败: " + resp.statusText);
-                                  setRefreshing(null);
-                                  setBatchRefreshProgress(prev => { const n = { ...prev }; delete n[curEp.id]; return n; });
-                                  return;
-                                }
-                                const result = await resp.json();
+                                const result = await api.generateBatchRefresh(project.id, curEp.id, dlgIds);
                                 setBatchRefreshProgress(prev => ({ ...prev, [curEp.id]: { current: 0, total: result.total, errors: [] } }));
                                 // 轮询进度
                                 const pollInterval = setInterval(async () => {
                                   try {
-                                    const statusResp = await fetch(`/api/projects/${project.id}/generation-status`);
-                                    if (!statusResp.ok) {
-                                      clearInterval(pollInterval);
-                                      onError("轮询请求失败: " + statusResp.statusText);
-                                      setRefreshing(null);
-                                      setBatchRefreshProgress(prev => { const n = { ...prev }; delete n[curEp.id]; return n; });
-                                      return;
-                                    }
-                                    const status = await statusResp.json();
+                                    const status = await api.getGenerationStatus(project.id);
                                     if (status.status === "complete") {
                                       clearInterval(pollInterval);
                                       setRefreshing(null);
