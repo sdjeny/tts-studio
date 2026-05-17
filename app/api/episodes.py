@@ -26,6 +26,9 @@ AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 # TTS 服务支持的音色列表
 _VALID_VOICES = {"aiden", "dylan", "eric", "ono_anna", "ryan", "serena", "sohee", "uncle_fu", "vivian"}
 
+# 每项目生成锁：防止多集串行提交时数据竞争
+_gen_locks: dict[str, asyncio.Lock] = {}
+
 
 def _build_chars_info(proj: dict, detailed: bool = False) -> list[str]:
     """构建角色信息列表（仅真实角色）。
@@ -1260,13 +1263,21 @@ async def api_generate_dialogues(project_id: str, episode_id: str, body: Dialogu
     from app.core.store import init_generation_task
     from app.core.dialogue_service import run_dialogue_generation
 
-    # 1. 初始化任务记录
+    # 1. 获取/创建 per-project 生成锁
+    if project_id not in _gen_locks:
+        _gen_locks[project_id] = asyncio.Lock()
+
+    # 2. 初始化任务记录
     task_id = init_generation_task(project_id, episode_id, "dialogue_generation")
 
-    # 2. 启动后台任务
-    asyncio.create_task(run_dialogue_generation(project_id, episode_id, body, task_id))
+    # 3. 在锁保护下启动后台任务
+    async def _locked_generation():
+        async with _gen_locks[project_id]:
+            await run_dialogue_generation(project_id, episode_id, body, task_id)
 
-    # 3. 立即返回
+    asyncio.create_task(_locked_generation())
+
+    # 4. 立即返回
     return JSONResponse({
         "task_id": task_id,
         "status": "running",
