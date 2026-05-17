@@ -454,7 +454,13 @@ function AIGenPanel({ project, onChange, onError }: {
               <button onClick={saveOutline} disabled={loading} style={{ ...btnGhost, color: "#3b82f6", borderColor: "#3b82f6" }}>
                 💾 保存大纲
               </button>
-              <button onClick={() => setStep("dialogues")} style={{ ...btnGhost, color: "#22c55e", borderColor: "#22c55e" }}>
+              <button onClick={() => {
+                    // 自动勾选前3个未生成对白的剧集
+                    const noDlg = outlineDraft.filter(item => !hasDialogues(item.id));
+                    setGenDialoguesFor(noDlg.slice(0, 3).map(e => e.id));
+                    setSelectAllEpisodes(false);
+                    setStep("dialogues");
+                }} style={{ ...btnGhost, color: "#22c55e", borderColor: "#22c55e" }}>
                 💬 确认并生成对白 →
               </button>
             </div>
