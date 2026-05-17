@@ -310,15 +310,15 @@ class DialogueGenerator:
                             break
                     break
 
-        # T1: 调用两步解析器
-        from app.core.dialogue_parser import parse_story_with_two_step
+# T1: 调用直接LLM拆解法
+        from app.core.dialogue_parser import parse_story_direct
 
         base_chars = [c.split(" (")[0].lstrip("- ") for c in chars_info if "旁白" not in c] if chars_info else []
 
-        # 传完整 api_url（含 /v1/chat/completions），dialogue_parser 不重复拼接
+        # 传完整 api_url
         api_url = llm_cfg.get("base_url", "").rstrip("/") + "/chat/completions"
 
-        dialogues = parse_story_with_two_step(
+        dialogues = parse_story_direct(
             story_text,
             known_chars=base_chars,
             llm_cfg={"api_url": api_url, "api_key": llm_cfg.get("api_key"), "model": llm_cfg.get("model")}
