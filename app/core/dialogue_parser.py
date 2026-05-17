@@ -216,17 +216,6 @@ def parse_story_direct(
 
     system_prompt = """你是一个故事文本分割器。将原始故事文本按对话段落拆解为JSON数组。
 
-核心规则（严格执行，按优先级排列）：
-
-1. **【严格！】每段 text 不超过 250 字** — 这是强制约束！超过250字的段落将被丢弃。
-   旁白太长时必须在句号/感叹号/问号/段落换行处切分成多段。
-2. **『』内的内容是对白**，必须分配给对应的说话角色
-3. **『』外的内容归旁白**：场景描写、动作描写、表情描写、心理活动、叙述性过渡全部归旁白，role为"旁白"
-4. **角色的 text 只包含『』内的纯对白**，不能混入"他笑了笑""她走上前""XX说"等叙述
-5. **旁白的 text 包含所有非对白叙述**，保留原文
-6. **角色名不能捏造**，从原文中提取说话人名字，统一称呼
-7. **instruct** 用2个中文词概括情绪（恐惧颤抖/愤怒嘶吼/轻声安慰等），没有则填空字符串
-
 输出格式（只输出这三个字段）：
 ```json
 [
@@ -234,6 +223,16 @@ def parse_story_direct(
   ...
 ]
 ```
+
+核心规则（严格执行）：
+
+1. **『』内的内容是对白**，必须分配给对应的说话角色
+2. **『』外的内容归旁白**：场景描写、动作描写、表情描写、心理活动、叙述性过渡全部归旁白，role为"旁白"
+3. **角色的 text 只包含『』内的纯对白**，不能混入"他笑了笑""她走上前""XX说"等叙述
+4. **旁白的 text 包含所有非对白叙述**，保留原文
+5. **角色名不能捏造**，从原文中提取说话人名字，统一称呼
+6. **每段 text 不超过 250 字**
+7. **instruct** 用2个中文词概括情绪（恐惧颤抖/愤怒嘶吼/轻声安慰等），没有则填空字符串
 
 格式示例：
 - 输入：卖家只说了一句话：『它能给你想要的』
@@ -299,42 +298,6 @@ def parse_story_direct(
                 item.setdefault("instruct", "")
                 item.setdefault("text", "")
                 result_list.append({"role": item["role"], "instruct": item["instruct"], "text": item["text"]})
-
-            # ---- Post-process: 按字数切分过长段落 ----
-            MAX_CHARS = 250
-            final_list = []
-            for item in result_list:
-                text = item.get("text", "")
-                if len(text) <= MAX_CHARS:
-                    final_list.append(item)
-                    continue
-                # 长文本：先按双换行切，再按句号/感叹号/问号切
-                paragraphs = re.split(r'\n\n+', text)
-                chunks = []
-                for para in paragraphs:
-                    if len(para) <= MAX_CHARS:
-                        chunks.append(para)
-                    else:
-                        sentences = re.split(r'(?<=[。！？])', para)
-                        buf = ""
-                        for sent in sentences:
-                            if not sent.strip():
-                                continue
-                            if len(buf) + len(sent) <= MAX_CHARS:
-                                buf += sent
-                            else:
-                                if buf.strip():
-                                    chunks.append(buf.strip())
-                                buf = sent
-                        if buf.strip():
-                            chunks.append(buf.strip())
-                for i, chunk in enumerate(chunks):
-                    final_list.append({
-                        "role": item.get("role", "旁白"),
-                        "instruct": item.get("instruct", "") if i == 0 else "",
-                        "text": chunk.strip(),
-                    })
-            result_list = final_list
             return result_list
 
         except Exception as e:
