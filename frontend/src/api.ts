@@ -205,11 +205,19 @@ export const api = {
     ),
 
   // audio generation
-  generateAudio: (pid: string, eid: string, dlgId: string) =>
-    request<Dialogue>(
-      `/projects/${pid}/episodes/${eid}/dialogues/${dlgId}/generate`,
-      { method: "POST" }
-    ),
+  generateAudio: async (pid: string, eid: string, dlgId: string) => {
+    try {
+      return await request<Dialogue>(
+        `/projects/${pid}/episodes/${eid}/dialogues/${dlgId}/generate`,
+        { method: "POST" }
+      );
+    } catch (e: any) {
+      if (e.message?.startsWith("405:")) {
+        throw new Error("音频生成服务暂时不可用，请刷新页面后重试");
+      }
+      throw e;
+    }
+  },
 
   // batch generate audio (后台任务模式)
   generateBatchAudio: (pid: string, eid: string, dialogueIds: string[]) =>
