@@ -175,6 +175,35 @@ def merge_narration_and_dialogue(
     return [{"role": e["role"], "instruct": e["instruct"], "text": e["text"]} for e in all_elements]
 
 
+def _chunk_long_texts(items: list[dict]) -> list[dict]:
+    """后处理：将 text 超过 250 字的条目按句边界切分，每段不超过 250 字。"""
+    result = []
+    for item in items:
+        text = item.get("text", "")
+        if len(text) <= 250:
+            result.append(item)
+            continue
+        # 按句号、问号、感叹号、省略号、换行切分
+        parts = re.split(r'(?<=[。？！\n]|\.{3}|…{2})', text)
+        chunk = ""
+        for part in parts:
+            if not part or part == "\n":
+                continue
+            if len(chunk) + len(part) <= 250:
+                chunk += part
+            else:
+                if chunk:
+                    result.append({"role": item["role"], "instruct": item.get("instruct", ""), "text": chunk.strip()})
+                # 如果 part 本身超过 250 字，强制在字边界切
+                while len(part) > 250:
+                    result.append({"role": item["role"], "instruct": item.get("instruct", ""), "text": part[:250].strip()})
+                    part = part[250:]
+                chunk = part
+        if chunk:
+            result.append({"role": item["role"], "instruct": item.get("instruct", ""), "text": chunk.strip()})
+    return result
+
+
 def parse_story_direct(
     story_text: str,
     known_chars: Optional[List[str]] = None,
@@ -226,12 +255,12 @@ def parse_story_direct(
 
 核心规则（严格执行）：
 
-1. **『』内的内容是对白**，必须分配给对应的说话角色
-2. **『』外的内容归旁白**：场景描写、动作描写、表情描写、心理活动、叙述性过渡全部归旁白，role为"旁白"
-3. **角色的 text 只包含『』内的纯对白**，不能混入"他笑了笑""她走上前""XX说"等叙述
-4. **旁白的 text 包含所有非对白叙述**，保留原文
-5. **角色名不能捏造**，从原文中提取说话人名字，统一称呼
-6. **每段 text 不超过 250 字**
+1. **每段 text 不超过 250 字**（这是最重要的约束，必须严格执行）
+2. **『』内的内容是对白**，必须分配给对应的说话角色
+3. **『』外的内容归旁白**：场景描写、动作描写、表情描写、心理活动、叙述性过渡全部归旁白，role为"旁白"
+4. **角色的 text 只包含『』内的纯对白**，不能混入"他笑了笑""她走上前""XX说"等叙述
+5. **旁白的 text 包含所有非对白叙述**，保留原文
+6. **角色名不能捏造**，从原文中提取说话人名字，统一称呼
 7. **instruct** 用2个中文词概括情绪（恐惧颤抖/愤怒嘶吼/轻声安慰等），没有则填空字符串
 
 格式示例：
@@ -298,7 +327,7 @@ def parse_story_direct(
                 item.setdefault("instruct", "")
                 item.setdefault("text", "")
                 result_list.append({"role": item["role"], "instruct": item["instruct"], "text": item["text"]})
-            return result_list
+            return _chunk_long_texts(result_list)
 
         except Exception as e:
             if attempt < 2:
