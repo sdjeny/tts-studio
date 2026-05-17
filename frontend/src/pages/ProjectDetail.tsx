@@ -126,9 +126,10 @@ function AIGenPanel({ project, onChange, onError }: {
   const estLines = Math.max(10, targetDuration * 60 / 4);
   const [loading, setLoading] = useState(false);
   const [storyArc, setStoryArc] = useState("");
-  const [outlineDraft, setOutlineDraft] = useState<Array<{ id: string; title: string; summary: string }>>([]);
   const [genDialoguesFor, setGenDialoguesFor] = useState<string[]>([]);
   const [selectAllEpisodes, setSelectAllEpisodes] = useState(false);
+  // 直接派生，无需独立状态 — 统一数据源自 project.episodes
+  const episodesWithSummary = project.episodes.filter(e => e.summary);
 
   // 检查剧集是否已有对白
   const hasDialogues = (epId: string) => {
@@ -136,16 +137,34 @@ function AIGenPanel({ project, onChange, onError }: {
     return ep && ep.dialogues && ep.dialogues.length > 0;
   };
 
-  // 已有剧集时，初始化 outlineDraft
-  useEffect(() => {
-    if (hasExistingOutline && outlineDraft.length === 0) {
-      setOutlineDraft(
-        project.episodes
-          .filter(e => e.summary)
-          .map(e => ({ id: e.id, title: e.title, summary: e.summary }))
-      );
+  // 编辑标题/摘要实时写盘（统一数据源，无需独立状态 + 保存按钮）
+  const updateOutlineItem = async (id: string, field: "title" | "summary", value: string) => {
+    const updated = field === "title" ? { title: value } : { summary: value };
+    try {
+      // 保留 arc_phase 前缀
+      if (field === "summary") {
+        const ep = project.episodes.find(e => e.id === id);
+        if (ep) {
+          const phase = ep.summary.match(/^\[(\w+)\]/)?.[1] || "";
+          await api.updateEpisode(project.id, id, { summary: phase ? `[${phase}] ${value}` : value });
+          return;
+        }
+      }
+      await api.updateEpisode(project.id, id, updated);
+    } catch (e: any) {
+      onError(`保存失败: ${e.message}`);
     }
-  }, [hasExistingOutline, project.episodes]);
+  };
+
+  const removeOutlineItem = async (id: string) => {
+    if (!confirm("删除该剧集及其所有对白？")) return;
+    try {
+      await api.deleteEpisode(project.id, id);
+      onChange();
+    } catch (e: any) {
+      onError(e.message);
+    }
+  };
 
   // 步骤1：生成完整大纲
   const generateOutline = async () => {
@@ -159,17 +178,6 @@ function AIGenPanel({ project, onChange, onError }: {
         await api.updateProject(project.id, r.story_title);
       }
       setStoryArc(r.story_arc || "");
-      // 直接从 API 获取最新项目数据，确保拿到新生成的剧集
-      const updated = await api.getProject(project.id);
-      const freshDraft = r.episode_ids.map((id: string, i: number) => {
-        const ep = updated.episodes.find(e => e.id === id);
-        return {
-          id,
-          title: ep?.title || `第${i + 1}集`,
-          summary: ep?.summary || "",
-        };
-      });
-      setOutlineDraft(freshDraft);
       onChange();
       setStep("outline");
       onError(`✅ 已生成 ${r.created} 集大纲`);
@@ -183,7 +191,7 @@ function AIGenPanel({ project, onChange, onError }: {
   const generateAllDialogues = async () => {
     setLoading(true);
     onError("");
-    const epsToGen = genDialoguesFor.length > 0 ? genDialoguesFor : (selectAllEpisodes ? outlineDraft.map(e => e.id) : []);
+    const epsToGen = genDialoguesFor.length > 0 ? genDialoguesFor : (selectAllEpisodes ? episodesWithSummary.map(e => e.id) : []);
     const errors: string[] = [];
     for (const epId of epsToGen) {
       try {
@@ -202,28 +210,16 @@ function AIGenPanel({ project, onChange, onError }: {
     setLoading(false);
   };
 
-  const updateOutlineItem = (id: string, field: "title" | "summary", value: string) => {
-    setOutlineDraft(prev => prev.map(item =>
-      item.id === id ? { ...item, [field]: value } : item
-    ));
-  };
-
   const saveOutline = async () => {
     setLoading(true);
     try {
-      for (const item of outlineDraft) {
-        await api.updateEpisode(project.id, item.id, { title: item.title, summary: item.summary });
-      }
+      // 已实时保存，仅做一次确认
       onChange();
       onError("✅ 大纲已保存");
     } catch (e: any) {
       onError(e.message);
     }
     setLoading(false);
-  };
-
-  const removeOutlineItem = (id: string) => {
-    setOutlineDraft(prev => prev.filter(item => item.id !== id));
   };
 
   const [regenDescription, setRegenDescription] = useState("");
@@ -234,7 +230,7 @@ function AIGenPanel({ project, onChange, onError }: {
 
   // 某张卡片点击「从本章重生」
   const openRegenForm = (episodeId: string, episodeIndex: number) => {
-    const episodesAfter = outlineDraft.length - (episodeIndex + 1);
+    const episodesAfter = episodesWithSummary.length - (episodeIndex + 1);
     const confirmMsg =
       `⚠️ 不可逆操作！\n\n` +
       `将从第 ${episodeIndex + 1} 集开始重新生成后续大纲。\n` +
@@ -264,9 +260,6 @@ function AIGenPanel({ project, onChange, onError }: {
       if (r.story_title && r.story_title !== project.name) {
         await api.updateProject(project.id, r.story_title);
       }
-      const updated = await api.getProject(project.id);
-      const allEps = updated.episodes.filter((e: any) => e.summary);
-      setOutlineDraft(allEps.map((e: any) => ({ id: e.id, title: e.title, summary: e.summary })));
       setGenDialoguesFor([]);
       setStoryArc(r.story_arc || "");
       setRegenOpenId(null);
@@ -341,12 +334,6 @@ function AIGenPanel({ project, onChange, onError }: {
                 </div>
                 <button
                   onClick={() => {
-                    // 初始化 outlineDraft 然后跳到编辑大纲
-                    setOutlineDraft(
-                      project.episodes
-                        .filter(e => e.summary)
-                        .map(e => ({ id: e.id, title: e.title, summary: e.summary }))
-                    );
                     setStep("outline");
                   }}
                   style={{
@@ -447,7 +434,7 @@ function AIGenPanel({ project, onChange, onError }: {
 
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <div style={{ fontSize: 13, color: "#94a3b8" }}>
-              共 {outlineDraft.length} 集，可编辑标题和摘要
+              共 {episodesWithSummary.length} 集，可编辑标题和摘要
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <button onClick={() => setStep("setup")} style={btnGhost}>← 返回修改</button>
@@ -456,7 +443,7 @@ function AIGenPanel({ project, onChange, onError }: {
               </button>
               <button onClick={() => {
                     // 自动勾选前3个未生成对白的剧集
-                    const noDlg = outlineDraft.filter(item => !hasDialogues(item.id));
+                    const noDlg = episodesWithSummary.filter(item => !hasDialogues(item.id));
                     setGenDialoguesFor(noDlg.slice(0, 3).map(e => e.id));
                     setSelectAllEpisodes(false);
                     setStep("dialogues");
@@ -466,7 +453,7 @@ function AIGenPanel({ project, onChange, onError }: {
             </div>
           </div>
 
-          {outlineDraft.map((item, i) => (
+          {episodesWithSummary.map((item, i) => (
             <div key={item.id} style={{
               background: "#0f1117",
               border: `1px solid ${getArcColor(item.summary)}33`,
@@ -491,7 +478,7 @@ function AIGenPanel({ project, onChange, onError }: {
                   onChange={(e) => updateOutlineItem(item.id, "title", e.target.value)}
                   style={{ ...inputMd, flex: 1, fontWeight: 600 }}
                 />
-                {i < outlineDraft.length - 1 && (
+                {i < episodesWithSummary.length - 1 && (
                   <button
                     onClick={() => openRegenForm(item.id, i)}
                     disabled={loading}
@@ -511,10 +498,7 @@ function AIGenPanel({ project, onChange, onError }: {
               </div>
               <textarea
                 value={item.summary.replace(/^\[(\w+)\]\s*/, "")}
-                onChange={(e) => {
-                  const phase = item.summary.match(/^\[(\w+)\]/)?.[1] || "";
-                  updateOutlineItem(item.id, "summary", phase ? `[${phase}] ${e.target.value}` : e.target.value);
-                }}
+                onChange={(e) => updateOutlineItem(item.id, "summary", e.target.value)}
                 rows={3}
                 style={{ ...inputMd, width: "100%", resize: "vertical", fontSize: 12 }}
                 placeholder="编辑剧集摘要..."
@@ -535,7 +519,7 @@ function AIGenPanel({ project, onChange, onError }: {
                     🔄 从第 {i + 1} 集《{cleanTitle(item.title)}》重生后续剧情
                   </div>
                   <div style={{ fontSize: 11, color: "#92400e" }}>
-                    ⚠️ 后续 {outlineDraft.length - i - 1} 集的所有内容（含音频）将被永久删除
+                    ⚠️ 后续 {episodesWithSummary.length - i - 1} 集的所有内容（含音频）将被永久删除
                   </div>
                   <div>
                     <label style={{ fontSize: 11, color: "#94a3b8", marginBottom: 2, display: "block" }}>
@@ -610,11 +594,11 @@ function AIGenPanel({ project, onChange, onError }: {
             padding: 16,
           }}>
             <div style={{ fontSize: 14, color: "#e2e8f0", marginBottom: 8 }}>
-              将为以下 <strong>{outlineDraft.length}</strong> 集生成旁白+对白：
+              将为以下 <strong>{episodesWithSummary.length}</strong> 集生成旁白+对白：
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
               <span style={{ fontSize: 13, color: "#94a3b8" }}>选择剧集</span>
-              <button onClick={() => { setSelectAllEpisodes(true); setGenDialoguesFor(outlineDraft.map(e => e.id)); }}
+              <button onClick={() => { setSelectAllEpisodes(true); setGenDialoguesFor(episodesWithSummary.map(e => e.id)); }}
                 style={{ fontSize: 11, padding: "2px 8px", borderRadius: 4, border: "1px solid #475569", color: "#94a3b8", background: "transparent", cursor: "pointer" }}>
                 全选
               </button>
@@ -627,7 +611,7 @@ function AIGenPanel({ project, onChange, onError }: {
               )}
             </div>
             <div style={{ display: "grid", gap: 4 }}>
-              {outlineDraft.map((item, i) => {
+              {episodesWithSummary.map((item, i) => {
                 const hasDlg = hasDialogues(item.id);
                 const isChecked = selectAllEpisodes || genDialoguesFor.includes(item.id);
                 return (
@@ -648,7 +632,7 @@ function AIGenPanel({ project, onChange, onError }: {
                       if (selectAllEpisodes) {
                         // 从全选状态切换：先退出全选，再处理当前项
                         setSelectAllEpisodes(false);
-                        setGenDialoguesFor(outlineDraft.map(e => e.id).filter(id => id !== item.id));
+                        setGenDialoguesFor(episodesWithSummary.map(e => e.id).filter(id => id !== item.id));
                       } else {
                         if (e.target.checked) {
                           setGenDialoguesFor(prev => [...prev, item.id]);
