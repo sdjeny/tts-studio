@@ -204,7 +204,8 @@ def parse_story_direct(
     api_key = "sk-octopus-rnY79KRKMQ8Afl38QNbZwzparD4FR6TPJcE2TTgtU9bk0yuv"
     model = "ollama"
     if llm_cfg:
-        base_url_cfg = llm_cfg.get("base_url")
+        # 兼容两种 key：base_url（完整路径）或 api_url（含 /chat/completions）
+        base_url_cfg = llm_cfg.get("base_url") or llm_cfg.get("api_url")
         if base_url_cfg:
             base_url = base_url_cfg
         api_key = llm_cfg.get("api_key") or api_key
