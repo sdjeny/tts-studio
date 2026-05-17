@@ -24,6 +24,7 @@ export default function EpisodePanel({ project, onChange, onError }: {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState<string | null>(null);
   const [batchRefreshProgress, setBatchRefreshProgress] = useState<Record<string, { current: number; total: number; errors: string[] }>>({});
+  const [batchProgress, setBatchProgress] = useState<{ current: number; total: number } | null>(null);
   const importFileInputRef = useRef<HTMLInputElement>(null);
 
   // 批量换角 state
@@ -90,6 +91,7 @@ export default function EpisodePanel({ project, onChange, onError }: {
     const dlgIds = targets.map((d: any) => d.id);
     try {
       const result = await api.generateBatchAudio(project.id, ep.id, dlgIds);
+      setBatchProgress({ current: 0, total: result.total });
       onError(`⏳ 已提交 ${result.total} 条 TTS 任务，后台生成中...`);
       // 轮询进度
       const pollInterval = setInterval(async () => {
@@ -97,22 +99,28 @@ export default function EpisodePanel({ project, onChange, onError }: {
           const status = await api.getGenerationStatus(project.id);
           if (status.status === "complete") {
             clearInterval(pollInterval);
+            setBatchProgress({ current: status.total || result.total, total: status.total || result.total });
+            setTimeout(() => setBatchProgress(null), 2000);
             onChange();
             onError(`✅ 全部完成！共 ${status.total || result.total} 条`);
           } else if (status.status === "error") {
             clearInterval(pollInterval);
+            setBatchProgress(null);
             onError(`❌ 生成失败: ${status.error}`);
           } else if (status.current !== undefined && status.total) {
+            setBatchProgress({ current: status.current, total: status.total });
             onError(`⏳ 进度 ${status.current}/${status.total}...`);
           }
         } catch (e: any) {
           clearInterval(pollInterval);
+          setBatchProgress(null);
           onError(`轮询失败: ${e.message}`);
         }
       }, 2000);
       // 60秒超时
-      setTimeout(() => clearInterval(pollInterval), 60000);
+      setTimeout(() => { clearInterval(pollInterval); setBatchProgress(null); }, 60000);
     } catch (e: any) {
+      setBatchProgress(null);
       onError(`批量生成请求失败: ${e.message}`);
     }
   };
@@ -287,6 +295,40 @@ export default function EpisodePanel({ project, onChange, onError }: {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* 批量生成进度条 */}
+      {batchProgress && (
+        <div style={{
+          background: "#0f1117",
+          border: "1px solid #22c55e33",
+          borderRadius: 8,
+          padding: "12px 16px",
+          marginBottom: 16,
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <span style={{ fontSize: 13, color: "#22c55e", fontWeight: 600 }}>🔊 音频生成进度</span>
+            <span style={{ fontSize: 12, color: "#64748b" }}>{batchProgress.current} / {batchProgress.total}</span>
+          </div>
+          <div style={{
+            width: "100%",
+            height: 8,
+            background: "#1e293b",
+            borderRadius: 4,
+            overflow: "hidden",
+          }}>
+            <div style={{
+              width: `${Math.round((batchProgress.current / batchProgress.total) * 100)}%`,
+              height: "100%",
+              background: "linear-gradient(90deg, #22c55e, #16a34a)",
+              borderRadius: 4,
+              transition: "width 0.3s ease",
+            }} />
+          </div>
+          <div style={{ fontSize: 11, color: "#64748b", marginTop: 4, textAlign: "right" }}>
+            {Math.round((batchProgress.current / batchProgress.total) * 100)}%
+          </div>
         </div>
       )}
 
