@@ -175,6 +175,139 @@ def merge_narration_and_dialogue(
     return [{"role": e["role"], "instruct": e["instruct"], "text": e["text"]} for e in all_elements]
 
 
+def parse_story_direct(
+    story_text: str,
+    known_chars: Optional[List[str]] = None,
+    llm_cfg: Optional[Dict] = None,
+) -> List[Dict[str, str]]:
+    """
+    直接 LLM 拆解法：原始文本 → JSON 数组
+    返回: [{role, instruct, text}, ...]
+
+    不做任何后续处理（不合并连续同角色对白、不做旁白切分/排序/合并）。
+    LLM 输出就是最终结果。
+
+    参数:
+        story_text: 原始故事文本
+        known_chars: 已知角色列表，帮助 LLM 识别
+        llm_cfg: LLM 配置字典，支持 base_url / api_key / model
+
+    返回:
+        [{role, instruct, text}, ...] 字段名 role（不是 character_name）
+    """
+    # ---- Guard: empty text ----
+    if not story_text or not story_text.strip():
+        return []
+
+    # ---- LLM 配置 ----
+    base_url = "http://192.168.0.77:7878/v1/chat/completions"
+    api_key = "sk-octopus-rnY79KRKMQ8Afl38QNbZwzparD4FR6TPJcE2TTgtU9bk0yuv"
+    model = "ollama"
+    if llm_cfg:
+        base_url_cfg = llm_cfg.get("base_url")
+        if base_url_cfg:
+            base_url = base_url_cfg
+        api_key = llm_cfg.get("api_key") or api_key
+        model = llm_cfg.get("model") or model
+
+    # ---- System Prompt ----
+    chars_hint = f"\n已知角色：{', '.join(known_chars)}。请优先使用已知角色名。" if known_chars else ""
+
+    system_prompt = """你是一个故事文本分割器。将原始故事文本按对话段落拆解为JSON数组。
+
+输出格式（只输出这三个字段）：
+```json
+[
+  {"role": "角色名", "instruct": "情绪词", "text": "原文段落"},
+  ...
+]
+```
+
+核心规则（严格执行）：
+
+1. **『』内的内容是对白**，必须分配给对应的说话角色
+2. **『』外的内容归旁白**：场景描写、动作描写、表情描写、心理活动、叙述性过渡全部归旁白，role为"旁白"
+3. **角色的 text 只包含『』内的纯对白**，不能混入"他笑了笑""她走上前""XX说"等叙述
+4. **旁白的 text 包含所有非对白叙述**，保留原文
+5. **角色名不能捏造**，从原文中提取说话人名字，统一称呼
+6. **每段 text 不超过 250 字**
+7. **instruct** 用2个中文词概括情绪（恐惧颤抖/愤怒嘶吼/轻声安慰等），没有则填空字符串
+
+格式示例：
+- 输入：卖家只说了一句话：『它能给你想要的』
+- 输出：[{"role":"旁白","instruct":"神秘","text":"卖家只说了一句话："},{"role":"卖家","instruct":"警告","text":"它能给你想要的"}]
+
+请直接输出JSON数组，不要markdown包裹。"""
+
+    user_prompt = f"请解析以下故事文本：{chars_hint}\n\n{story_text}\n\n输出JSON数组。"
+
+    # ---- API 调用 ----
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0,
+        "max_tokens": 16384,
+        "stream": False,
+    }
+
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        base_url,
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+
+    # ---- Retry 机制 ----
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=300) as resp:
+                result = json.loads(resp.read())
+            msg = result["choices"][0]["message"]
+            content = msg.get("content") or ""
+            # 兼容商汤 content/reasoning 分裂：短文本格式
+            if not content and msg.get("reasoning") and attempt < 1:
+                continue  # 重试一次
+            if not content:
+                raise ValueError(f"LLM returned no content. Keys: {list(msg.keys())}")
+
+            # 提取 JSON 数组
+            arr_start = content.find("[")
+            arr_end = content.rfind("]")
+            if arr_start >= 0 and arr_end > arr_start:
+                content = content[arr_start : arr_end + 1]
+
+            parsed = json.loads(content)
+
+            # 确保每个条目包含 role 字段（兼容 character_name）
+            result_list = []
+            for item in parsed:
+                if "role" not in item:
+                    if "character_name" in item:
+                        item["role"] = item.pop("character_name")
+                    else:
+                        item["role"] = "旁白"
+                # 确保字段存在
+                item.setdefault("instruct", "")
+                item.setdefault("text", "")
+                result_list.append({"role": item["role"], "instruct": item["instruct"], "text": item["text"]})
+            return result_list
+
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(2)
+            else:
+                raise
+
+    return []
+
+
 def parse_story_with_two_step(
     story_text: str,
     known_chars: Optional[List[str]] = None,
@@ -185,6 +318,10 @@ def parse_story_with_two_step(
     1. 代码提取引号对白
     2. LLM 解析角色
     3. 合并旁白 + 对白
+
+    .. deprecated::
+        此函数已弃用，请使用 parse_story_direct() 替代。
+        parse_story_direct 采用直接 LLM 拆解法，效果更优。
     """
     # 步骤1：提取对白
     dialogues = extract_dialogues(story_text)
