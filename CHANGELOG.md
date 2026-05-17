@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [未发布] PR #52 — dialogue_service.py 切换到 parse_story_direct()
+
+### Changed
+- `app/core/dialogue_service.py` 从 `parse_story_with_two_step()` 切换到 `parse_story_direct()` 调用（Refs #52）
+  - 直接 LLM 拆解替代原先的两步流水线
+  - `parse_story_with_two_step()` 不再被主动调用
+
+## [未发布] PR #51 — 新增 parse_story_direct() 直接 LLM 拆解法
+
+### Added
+- 新增 `parse_story_direct()` — 直接 LLM 拆解法，替换三步流水线（Refs #51）
+  - 一步到位：LLM 一次性完成角色拆分与对话归类
+  - 减少中间环节，降低信息丢失风险
+
+### Deprecated
+- `parse_story_with_two_step()` 标记为 deprecated，保留向后兼容（Refs #51）
+  - 旧两步流水线将逐步移除
+
 ## [未发布] Issue #45 — _build_chars_info 过滤旁白角色
 
 ### Fixed
