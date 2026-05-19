@@ -18,6 +18,28 @@ def _safe_voice_id(voice_id: str) -> str:
     return voice_id if voice_id in _VALID_VOICES else "aiden"
 
 
+def _extract_chars_from_story(story_text: str) -> list[str] | None:
+    """从故事末尾提取【角色清单】，返回角色名列表或None"""
+    import re as _re
+    if not story_text:
+        return None
+    m = _re.search(r'【角色清单】', story_text)
+    if not m:
+        return None
+    tail = story_text[m.end():].strip()
+    chars = []
+    for line in tail.split('\n'):
+        ln = line.strip()
+        if not ln:
+            continue
+        if ln.startswith('【') or ln.startswith('#') or ln.startswith('---'):
+            break
+        ln = _re.sub(r'^[\d\.\-\s]+', '', ln).strip()
+        if ln and '旁白' not in ln:
+            chars.append(ln)
+    return chars if chars else None
+
+
 def _build_chars_info(proj: dict, detailed: bool = False) -> list[str]:
     """构建角色信息列表。detailed=True 时包含 base_instruct。"""
     chars = list(proj.get("characters", []))
@@ -244,6 +266,11 @@ class DialogueGenerator:
 - 旁白不需要引号，直接叙述即可
 - 『』只用于包裹角色对话，禁止用于标注特殊名词、强调词语或其他用途
 
+【角色清单】
+- 请在故事末尾空一行，单独列出【角色清单】，列出所有在故事中出现过的角色名
+- 每行一个角色名，不要序号，不含"旁白"
+注意：这部分是生成角色清单，不是让角色说话，不要打乱故事的结构和节奏。
+
 【衔接要求】
 - 本章内容必须承前启后，与前后章节自然衔接
 - 如果有后续章节，本章不能提前消耗后续的关键情节或悬念
@@ -313,7 +340,10 @@ class DialogueGenerator:
 # T1: 调用直接LLM拆解法
         from app.core.dialogue_parser import parse_story_direct
 
-        base_chars = [c.split(" (")[0].lstrip("- ") for c in chars_info if "旁白" not in c] if chars_info else []
+        raw_chars = _extract_chars_from_story(story_text)
+        if raw_chars:
+            sys.stderr.write(f"  [B2-PARSE] 从故事提取角色清单: {raw_chars}\n")
+        base_chars = raw_chars or [c.split(" (")[0].lstrip("- ") for c in chars_info if "旁白" not in c] if chars_info else []
 
         # 传完整 api_url
         api_url = llm_cfg.get("base_url", "").rstrip("/") + "/chat/completions"
