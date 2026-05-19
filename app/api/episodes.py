@@ -23,9 +23,6 @@ router = APIRouter()
 AUDIO_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "audio"
 AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
-# TTS 服务支持的音色列表
-_VALID_VOICES = {"aiden", "dylan", "eric", "ono_anna", "ryan", "serena", "sohee", "uncle_fu", "vivian"}
-
 # 每项目生成锁：防止多集串行提交时数据竞争
 _gen_locks: dict[str, asyncio.Lock] = {}
 
@@ -60,10 +57,6 @@ def _audio_duration(filepath: str) -> float:
     except Exception:
         return 0.0
 
-
-def _safe_voice_id(voice_id: str) -> str:
-    """校验 voice_id，不支持则回退到 aiden。"""
-    return voice_id if voice_id in _VALID_VOICES else "aiden"
 
 # ── schemas ────────────────────────────────────────────
 
@@ -333,7 +326,7 @@ def _resolve_dialogue_tts_params(project_id: str, dlg: dict, proj: dict = None) 
             char = existing
         else:
             char = add_character(
-                project_id, char_name, voice_id="aiden",
+                project_id, char_name, voice_id="",
                 description=f"自动创建角色（原 ID: {char_id}），可在角色面板修改音色",
             )
             if char:
@@ -342,7 +335,7 @@ def _resolve_dialogue_tts_params(project_id: str, dlg: dict, proj: dict = None) 
         raise HTTPException(400, f"角色不存在（character_id: {char_id}），请先在角色管理中创建角色或修改对白的角色设置")
 
     # ── voice_id 安全校验 ──────────────────────────────
-    voice_id = _safe_voice_id(char.get("voice_id", "aiden"))
+    voice_id = char.get("voice_id", "")
 
     # ── instruct 组合（受 style_enabled 开关控制） ──────
     base_instruct = char.get("base_instruct", "")
@@ -1404,9 +1397,9 @@ async def api_batch_replace_character(project_id: str, body: BatchReplaceCharReq
         old_voice = None
         for c in proj.get("characters", []):
             if c["name"].strip() == old_name:
-                old_voice = c.get("voice_id", "aiden")
+                old_voice = c.get("voice_id", "")
                 break
-        voice_id = _safe_voice_id(old_voice or "aiden")
+        voice_id = old_voice or ""
         new_char = add_character(project_id, new_name, voice_id, description=f"由「{old_name}」换角创建")
         if new_char:
             proj["characters"].append(new_char)
