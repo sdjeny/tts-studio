@@ -22,7 +22,7 @@ def _load_tts_defaults() -> dict:
         "top_k": 5,
         "top_p": 0.3,
         "repetition_penalty": 1.1,
-        "voice_id": "aiden",
+        "voice_id": "",
     }
     try:
         if _CONFIG_PATH.exists():
@@ -125,7 +125,7 @@ def list_projects() -> list[dict]:
                 "top_k": 5,
                 "top_p": 0.3,
                 "repetition_penalty": 1.1,
-                "voice_id": "aiden",
+                "voice_id": "",
             }
             dirty = True
     if dirty:

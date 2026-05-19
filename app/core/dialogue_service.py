@@ -10,14 +10,7 @@ from app.core.store import (
     get_project, get_episode, add_dialogue, add_character, update_episode,
 )
 
-# TTS 服务支持的音色列表（与 episodes.py 中 _VALID_VOICES 保持一致）
-_VALID_VOICES = {"aiden", "dylan", "eric", "ono_anna", "ryan", "serena", "sohee", "uncle_fu", "vivian"}
-
-
-def _safe_voice_id(voice_id: str) -> str:
-    return voice_id if voice_id in _VALID_VOICES else "aiden"
-
-
+# ── DialogueGenerator 定义 ──────────────────────────
 def _extract_chars_from_story(story_text: str) -> list[str] | None:
     """从故事末尾提取【角色清单】，返回角色名列表或None"""
     import re as _re
@@ -463,8 +456,8 @@ class DialogueGenerator:
         if best_ratio >= 0.7 and best_cid:
             return best_cid, False
         # 5. 创建新角色
-        existing_voices = [_safe_voice_id(c.get("voice_id", "")) for c in proj.get("characters", [])]
-        voice_id = existing_voices[0] if existing_voices else "aiden"
+        existing_voices = [c.get("voice_id", "") for c in proj.get("characters", [])]
+        voice_id = existing_voices[0] if existing_voices else ""
         new_char = add_character(
             self.project_id, char_name, voice_id,
             description=f"AI 自动生成角色: {char_name}"
