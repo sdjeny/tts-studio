@@ -5,7 +5,7 @@ import sys
 import re as _re
 from difflib import SequenceMatcher
 
-from app.core.llm import chat_json, get_llm_config
+from app.core.llm import chat, chat_json, get_llm_config
 from app.core.store import (
     get_project, get_episode, add_dialogue, add_character, update_episode,
 )
@@ -293,8 +293,7 @@ class DialogueGenerator:
         sys.stderr.flush()
 
         try:
-            from app.core.llm import chat as _chat_raw
-            story_text = _chat_raw([
+            story_text = await chat([
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ], max_tokens=max(4096, word_count * 3), timeout=600, temperature=temperature)
@@ -542,7 +541,7 @@ class DialogueGenerator:
         yield "planning", {"scenes": num_scenes, "total": target_total}
 
         try:
-            plan_result = chat_json([
+            plan_result = await chat_json([
                 {"role": "system", "content": plan_system},
                 {"role": "user", "content": plan_user},
             ], max_tokens=4000, timeout=300)
@@ -622,7 +621,7 @@ class DialogueGenerator:
                 for retry in range(3):
                     try:
                         est_tokens = int(still_need * 120) + 1000
-                        scene_result = chat_json([
+                        scene_result = await chat_json([
                             {"role": "system", "content": write_system},
                             {"role": "user", "content": write_user},
                         ], max_tokens=est_tokens, timeout=300)

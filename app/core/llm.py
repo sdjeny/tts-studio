@@ -1,8 +1,13 @@
 """OpenAI 协议 LLM 客户端."""
 import json
-import urllib.request
-import urllib.error
 from pathlib import Path
+try:
+    import httpx
+except ImportError:
+    import subprocess
+    import sys
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "httpx"])
+    import httpx
 
 _CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
 _config = None
@@ -26,7 +31,7 @@ def get_llm_config():
     return cfg.get("llm", {})
 
 
-def chat(messages: list[dict], **overrides) -> str:
+async def chat(messages: list[dict], **overrides) -> str:
     """
     发送 chat 请求，返回 assistant 回复文本。
     messages: [{"role": "system"|"user"|"assistant", "content": "..."}]
@@ -52,38 +57,37 @@ def chat(messages: list[dict], **overrides) -> str:
         raise Exception("LLM api_key 未配置，请检查 app/config.yaml")
 
     url = f"{base_url}/chat/completions"
-    body = json.dumps({
+    body = {
         "model": model,
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
-    }).encode("utf-8")
+    }
 
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}",
     }
 
-    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read()
-            data = json.loads(raw)
+        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as client:
+            resp = await client.post(url, json=body, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
             choices = data.get("choices", [])
             if choices:
                 return choices[0].get("message", {}).get("content", "")
-            raise Exception(f"LLM 返回无 choices: {raw[:200]}")
-    except urllib.error.HTTPError as e:
-        raw = e.read()
-        raise Exception(f"LLM API 错误 {e.code}: {raw[:200]}")
+            raise Exception(f"LLM 返回无 choices: {json.dumps(data)[:200]}")
+    except httpx.HTTPStatusError as e:
+        raise Exception(f"LLM API 错误 {e.response.status_code}: {e.response.text[:200]}")
     except Exception as e:
         raise Exception(f"LLM 请求失败: {e}")
 
 
-def chat_json(messages: list[dict], **overrides) -> dict:
+async def chat_json(messages: list[dict], **overrides) -> dict:
     """发送 chat 请求，期望返回 JSON，解析为 dict。"""
     import re
-    text = chat(messages, **overrides)
+    text = await chat(messages, **overrides)
     text = text.strip()
     # 去掉 <think>...</think> 推理块（MiniMax 等模型会输出）
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
