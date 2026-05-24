@@ -1285,9 +1285,10 @@ async def api_generate_dialogues(project_id: str, episode_id: str, body: Dialogu
 
     # 3. 在锁保护下启动后台任务
     async def _locked_generation():
-        async with _gen_locks.get(project_id, asyncio.Lock()):
+        try:
             await run_dialogue_generation(project_id, episode_id, body, task_id)
-            TaskManager.release(project_id, episode_id, "dialogues")
+        finally:
+            TaskManager.release(episode_id, "dialogues")
 
     asyncio.create_task(_locked_generation())
 
@@ -1328,7 +1329,7 @@ async def api_generate_next_episode(project_id: str, episode_id: str):
 
     task_id = TaskManager.create(project_id, episode_id, "continuation")
     if not task_id:
-        TaskManager.release(project_id, episode_id, "continuation")
+        TaskManager.release(episode_id, "continuation")
         raise HTTPException(500, "创建任务失败")
 
     asyncio.create_task(_bg_generate_next(project_id, episode_id, task_id))
@@ -1392,7 +1393,7 @@ async def _bg_generate_next(project_id: str, episode_id: str, task_id: str):
     except Exception as e:
         TaskManager.update(project_id, task_id, status="error", error=str(e))
     finally:
-        TaskManager.release(project_id, episode_id, "continuation")
+        TaskManager.release(episode_id, "continuation")
 
 
 # ── Batch character replacement ─────────────────────────
