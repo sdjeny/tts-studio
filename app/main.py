@@ -11,6 +11,7 @@ from fastapi.responses import HTMLResponse, FileResponse
 
 import uuid as _uuid
 from app.api import projects, episodes, timeline, voices, config as config_api
+from app.api.task_routes import router as task_router
 import app.core.store as _store
 from app.core.store import get_project
 from app.core.audio_effects import apply_effects_to_file
@@ -101,6 +102,7 @@ app.include_router(episodes.router, prefix="/api")
 app.include_router(voices.router, prefix="/api")
 app.include_router(timeline.router, prefix="/api")
 app.include_router(config_api.router, prefix="/api")
+app.include_router(task_router, prefix="/api")
 
 
 @app.get("/api/health")
