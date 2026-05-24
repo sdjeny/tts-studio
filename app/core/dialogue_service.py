@@ -773,6 +773,7 @@ async def run_batch_refresh(project_id: str, episode_id: str, dialogue_ids: list
     """后台批量刷新对白状态（原 SSE 流式逻辑，改为通过 update_generation_task 更新进度）。"""
     from app.core.store import update_generation_task
     from app.api.episodes import get_episode, _refresh_single_dialogue
+    from app.core.task_manager import TaskManager
     try:
         ep = get_episode(project_id, episode_id)
         if not ep:
@@ -800,6 +801,8 @@ async def run_batch_refresh(project_id: str, episode_id: str, dialogue_ids: list
         update_generation_task(project_id, task_id, status="complete", current=ok + fail)
     except Exception as e:
         update_generation_task(project_id, task_id, status="error", error=str(e))
+    finally:
+        TaskManager.release(episode_id, "refresh")
 
 
 async def run_batch_generate(project_id: str, episode_id: str, dialogue_ids: list[str], task_id: str):
@@ -807,6 +810,7 @@ async def run_batch_generate(project_id: str, episode_id: str, dialogue_ids: lis
     from app.core.store import update_generation_task
     from app.api.episodes import get_episode, get_project, _resolve_dialogue_tts_params, _download_and_save
     from app.api.episodes import submit_tts
+    from app.core.task_manager import TaskManager
     import uuid
     import asyncio
     try:
@@ -861,3 +865,5 @@ async def run_batch_generate(project_id: str, episode_id: str, dialogue_ids: lis
         update_generation_task(project_id, task_id, status="complete", current=submitted + len(failed_list))
     except Exception as e:
         update_generation_task(project_id, task_id, status="error", error=str(e))
+    finally:
+        TaskManager.release(episode_id, "generate_batch")
