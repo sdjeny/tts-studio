@@ -27,9 +27,16 @@ async def api_list_llm_tasks(project_id: str):
 @router.post("/projects/{project_id}/llm/task/{task_id}/cancel")
 async def api_cancel_llm_task(project_id: str, task_id: str):
     """取消一个正在运行或卡住的任务。"""
-    from app.core.store import cancel_generation_task, get_generation_task
+    from app.core.store import cancel_generation_task, list_generation_tasks
     from app.core.task_manager import TaskManager
-    task = get_generation_task(project_id, task_id=task_id)
+
+    # 通过 list_generation_tasks 查找目标任务
+    tasks = list_generation_tasks(project_id)
+    task = None
+    for t in tasks:
+        if t.get("id") == task_id or t.get("task_id") == task_id:
+            task = t
+            break
     if not task:
         raise HTTPException(404, "Task not found")
     if task.get("status") in ("complete",):
@@ -41,5 +48,9 @@ async def api_cancel_llm_task(project_id: str, task_id: str):
     task_type = task.get("type", task.get("task_type", ""))
     if episode_id and task_type:
         TaskManager.release(episode_id, task_type)
-    updated_task = get_generation_task(project_id, task_id=task_id)
-    return JSONResponse(updated_task)
+    # 返回最新状态
+    tasks_updated = list_generation_tasks(project_id)
+    for t in tasks_updated:
+        if t.get("id") == task_id or t.get("task_id") == task_id:
+            return JSONResponse(t)
+    return JSONResponse({"status": "cancelled", "task_id": task_id})
