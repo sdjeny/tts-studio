@@ -10,7 +10,7 @@ _project_locks: dict[str, asyncio.Lock] = {}
 
 
 class TaskManager:
-    TASK_TYPES = ("outline", "dialogues", "continuation")
+    TASK_TYPES = ("outline", "dialogues", "continuation", "generate_batch", "refresh", "single_audio")
     
     @staticmethod
     def create(project_id: str, episode_id: str, task_type: str, total: int = 0) -> str:
@@ -50,7 +50,44 @@ class TaskManager:
         key = (episode_id, task_type)
         if key in _locks:
             del _locks[key]
-    
+
+    @staticmethod
+    def has_active_tasks(project_id: str) -> list:
+        """查询项目是否有活跃的 LLM 任务。返回活跃任务列表（空=无）。"""
+        from app.core.store import list_generation_tasks
+
+        active = []
+
+        # 1. 检查内存锁中的活跃任务
+        for key, info in _locks.items():
+            if info.get("project_id") == project_id and info.get("active", False):
+                elapsed = time.time() - info.get("started_at", 0)
+                if elapsed < 300:  # 5分钟内有效
+                    ep_id, task_type = key
+                    active.append({"episode_id": ep_id, "type": task_type,
+                                   "source": "memory_lock", "elapsed": round(elapsed, 1)})
+
+        # 2. 检查持久化任务中的 running/pending 状态
+        persisted = list_generation_tasks(project_id, status="running") + \
+                    list_generation_tasks(project_id, status="pending")
+        # 去重：已在内存锁中的不重复添加
+        for task in persisted:
+            already = any(
+                t.get("type") == task.get("type") and
+                t.get("episode_id") == task.get("episode_id")
+                for t in active
+            )
+            if not already:
+                active.append({
+                    "episode_id": task.get("episode_id", ""),
+                    "type": task.get("type", ""),
+                    "source": "persisted",
+                    "task_id": task.get("task_id", ""),
+                    "progress": f"{task.get('current', 0)}/{task.get('total', 0)}" if task.get("total") else "",
+                })
+
+        return active
+
     @staticmethod
     def get_project_lock(project_id: str) -> asyncio.Lock:
         """获取项目级 asyncio 锁（用于批量串行）。"""
