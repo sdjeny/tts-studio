@@ -7,7 +7,7 @@ from app.core.task_manager import TaskManager
 router = APIRouter()
 
 
-@router.get("/llm/task/{task_id}")
+@router.get("/projects/{project_id}/llm/task/{task_id}")
 async def api_get_llm_task(project_id: str, task_id: str):
     """查询单个任务的当前状态。"""
     task = TaskManager.get(project_id, task_id)
@@ -18,13 +18,28 @@ async def api_get_llm_task(project_id: str, task_id: str):
 
 @router.get("/projects/{project_id}/llm/tasks")
 async def api_list_llm_tasks(project_id: str):
-    """列出项目的所有 LLM 生成任务（最近20条）。"""
-    from app.core.store import get_generation_task
-    # 用 None 触发列表查询 — 根据 store.py 实际接口调整
-    tasks = get_generation_task(project_id)
-    if not tasks:
-        return {"tasks": []}
-    # 如果是 dict 则包装
-    if isinstance(tasks, dict):
-        return {"tasks": [tasks]}
-    return {"tasks": tasks[:20]}
+    """列出项目的所有 LLM 生成任务（最近50条）。"""
+    from app.core.store import list_generation_tasks
+    tasks = list_generation_tasks(project_id)
+    return {"tasks": tasks[:50]}
+
+
+@router.post("/projects/{project_id}/llm/task/{task_id}/cancel")
+async def api_cancel_llm_task(project_id: str, task_id: str):
+    """取消一个正在运行或卡住的任务。"""
+    from app.core.store import cancel_generation_task, get_generation_task
+    from app.core.task_manager import TaskManager
+    task = get_generation_task(project_id, task_id=task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    if task.get("status") in ("complete",):
+        raise HTTPException(409, "任务已完成，不允许取消")
+    if task.get("status") == "cancelled":
+        raise HTTPException(409, "任务已取消")
+    cancel_generation_task(project_id, task_id)
+    episode_id = task.get("episode_id", "")
+    task_type = task.get("type", task.get("task_type", ""))
+    if episode_id and task_type:
+        TaskManager.release(episode_id, task_type)
+    updated_task = get_generation_task(project_id, task_id=task_id)
+    return JSONResponse(updated_task)
