@@ -3,8 +3,9 @@ import { api, Project } from "../api";
 import CharacterPanel from "../components/CharacterPanel";
 import EpisodePanel from "../components/EpisodePanel";
 import ProjectSettings from "../components/ProjectSettings";
+import TaskPanel from "../components/TaskPanel";
 
-type Tab = "ai" | "episodes" | "characters" | "settings";
+type Tab = "ai" | "episodes" | "characters" | "tasks" | "settings";
 
 export default function ProjectDetail({ projectId, onBack }: { projectId: string; onBack: () => void }) {
   const [project, setProject] = useState<Project | null>(null);
@@ -93,9 +94,9 @@ export default function ProjectDetail({ projectId, onBack }: { projectId: string
 
       {/* tabs */}
       <div style={{ display: "flex", gap: 4, marginBottom: 20 }}>
-        {(["ai", "characters", "episodes", "settings"] as Tab[]).map((t) => (
+        {(["ai", "characters", "episodes", "tasks", "settings"] as Tab[]).map((t) => (
           <button key={t} onClick={() => setTab(t)} style={tab === t ? btnTabActive : btnTab}>
-            {t === "ai" ? "🤖 AI 生成" : t === "episodes" ? "📺 剧集" : t === "characters" ? "🎭 角色" : "⚙️ 项目设置"}
+            {t === "ai" ? "🤖 AI 生成" : t === "episodes" ? "📺 剧集" : t === "characters" ? "🎭 角色" : t === "tasks" ? "📋 LLM 任务" : "⚙️ 项目设置"}
           </button>
         ))}
       </div>
@@ -103,6 +104,7 @@ export default function ProjectDetail({ projectId, onBack }: { projectId: string
       {tab === "ai" && <AIGenPanel project={project} onChange={load} onError={setError} />}
       {tab === "characters" && <CharacterPanel project={project} onChange={load} onError={setError} />}
       {tab === "episodes" && <EpisodePanel project={project} onChange={load} onError={setError} />}
+      {tab === "tasks" && <TaskPanel projectId={project.id} />}
       {tab === "settings" && <ProjectSettings project={project} onChange={load} onError={setError} />}
     </div>
   );
@@ -125,6 +127,7 @@ function AIGenPanel({ project, onChange, onError }: {
   const [narrationRatio, setNarrationRatio] = useState(50);
   const estLines = Math.max(10, targetDuration * 60 / 4);
   const [loading, setLoading] = useState(false);
+  const [projectHasActiveTask, setProjectHasActiveTask] = useState(false);
   const [storyArc, setStoryArc] = useState("");
   const [genDialoguesFor, setGenDialoguesFor] = useState<string[]>([]);
   const [selectAllEpisodes, setSelectAllEpisodes] = useState(false);
@@ -136,6 +139,13 @@ function AIGenPanel({ project, onChange, onError }: {
     const ep = project.episodes.find(e => e.id === epId);
     return ep && ep.dialogues && ep.dialogues.length > 0;
   };
+
+  // 组件挂载时检查项目是否有活跃 LLM 任务
+  useEffect(() => {
+    (api as any).getGenerationActive(project.id).then(r => {
+      setProjectHasActiveTask(r.active);
+    }).catch(() => {});
+  }, [project.id]);
 
   // 编辑标题/摘要实时写盘（统一数据源，无需独立状态 + 保存按钮）
   const updateOutlineItem = async (id: string, field: "title" | "summary", value: string) => {
@@ -189,25 +199,39 @@ function AIGenPanel({ project, onChange, onError }: {
 
   // 步骤2：编辑大纲后批量生成对白
   const generateAllDialogues = async () => {
+    if (projectHasActiveTask) {
+      onError("⚠️ 项目有正在进行的生成任务，请等待完成后再试");
+      return;
+    }
     setLoading(true);
     onError("");
     const epsToGen = genDialoguesFor.length > 0 ? genDialoguesFor : (selectAllEpisodes ? episodesWithSummary.map(e => e.id) : []);
     const errors: string[] = [];
+    setProjectHasActiveTask(true);
     for (const epId of epsToGen) {
       try {
         await api.generateDialogues(project.id, epId, "", targetDuration, narrationRatio);
       } catch (e: any) {
-        errors.push(e.message);
+        if (e.message.includes("409")) {
+          errors.push("⚠️ 该集正在生成中，跳过");
+          setProjectHasActiveTask(true);
+        } else {
+          errors.push(e.message);
+        }
       }
     }
     onChange();
     setStep("outline");
     if (errors.length > 0) {
-      onError(`✅ 已提交 ${epsToGen.length - errors.length} 集生成任务（${errors.length} 集失败，请重试）`);
+      onError(`✅ 已提交 ${epsToGen.length - errors.length} 集生成任务（${errors.length} 集失败）`);
     } else {
       onError(`✅ 已提交 ${epsToGen.length} 集生成任务，后台处理中`);
     }
     setLoading(false);
+    // 重新检查活跃状态
+    (api as any).getGenerationActive(project.id).then(r => {
+      setProjectHasActiveTask(r.active);
+    }).catch(() => {});
   };
 
   const saveOutline = async () => {
@@ -690,19 +714,19 @@ function AIGenPanel({ project, onChange, onError }: {
             <button onClick={() => setStep("outline")} style={btnGhost}>← 返回编辑大纲</button>
             <button
               onClick={generateAllDialogues}
-              disabled={loading}
+              disabled={loading || projectHasActiveTask}
               style={{
                 padding: "10px 24px",
-                background: loading ? "#334155" : "#22c55e",
+                background: loading || projectHasActiveTask ? "#334155" : "#22c55e",
                 color: "#fff",
                 border: "none",
                 borderRadius: 8,
-                cursor: loading ? "wait" : "pointer",
+                cursor: loading || projectHasActiveTask ? "not-allowed" : "pointer",
                 fontWeight: 600,
                 fontSize: 14,
               }}
             >
-              {loading ? "⏳ 生成中..." : "🚀 批量生成旁白+对白"}
+              {loading ? "⏳ 生成中..." : projectHasActiveTask ? "⏳ 项目任务进行中" : "🚀 批量生成旁白+对白"}
             </button>
           </div>
         </div>
