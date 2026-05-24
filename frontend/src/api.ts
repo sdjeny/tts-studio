@@ -345,6 +345,25 @@ export const api = {
       }).catch(reject);
     });
   },
+
+  // 查询项目是否有活跃的 LLM 任务
+  getGenerationActive: (pid: string) =>
+    request<{ active: boolean; task_count?: number; tasks?: any[] }>(
+      `/projects/${pid}/generation-active`
+    ),
+
+  // 列出项目所有 LLM 任务（最近20条）
+  listLLMTasks: (pid: string) =>
+    request<{ tasks: any[] }>(`/projects/${pid}/llm/tasks`),
+
+  // 查询单个 LLM 任务详情
+  getLLMTask: (pid: string, taskId: string) =>
+    request<any>(`/projects/${pid}/llm/task/${taskId}`),
+
+  // 取消 LLM 任务
+  cancelTask: (pid: string, taskId: string) =>
+    request<any>(`/projects/${pid}/llm/task/${taskId}/cancel`, { method: "POST" }),
+
   generateNextEpisode: (pid: string, eid: string) =>
     request<{ episode_id: string; title: string; summary: string }>(
       `/projects/${pid}/episodes/${eid}/generate-next`,

@@ -5,7 +5,7 @@ import sys
 import re as _re
 from difflib import SequenceMatcher
 
-from app.core.llm import chat_json, get_llm_config
+from app.core.llm import chat, chat_json, get_llm_config
 from app.core.store import (
     get_project, get_episode, add_dialogue, add_character, update_episode,
 )
@@ -293,8 +293,7 @@ class DialogueGenerator:
         sys.stderr.flush()
 
         try:
-            from app.core.llm import chat as _chat_raw
-            story_text = _chat_raw([
+            story_text = await chat([
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ], max_tokens=max(4096, word_count * 3), timeout=600, temperature=temperature)
@@ -542,7 +541,7 @@ class DialogueGenerator:
         yield "planning", {"scenes": num_scenes, "total": target_total}
 
         try:
-            plan_result = chat_json([
+            plan_result = await chat_json([
                 {"role": "system", "content": plan_system},
                 {"role": "user", "content": plan_user},
             ], max_tokens=4000, timeout=300)
@@ -622,7 +621,7 @@ class DialogueGenerator:
                 for retry in range(3):
                     try:
                         est_tokens = int(still_need * 120) + 1000
-                        scene_result = chat_json([
+                        scene_result = await chat_json([
                             {"role": "system", "content": write_system},
                             {"role": "user", "content": write_user},
                         ], max_tokens=est_tokens, timeout=300)
@@ -774,6 +773,7 @@ async def run_batch_refresh(project_id: str, episode_id: str, dialogue_ids: list
     """后台批量刷新对白状态（原 SSE 流式逻辑，改为通过 update_generation_task 更新进度）。"""
     from app.core.store import update_generation_task
     from app.api.episodes import get_episode, _refresh_single_dialogue
+    from app.core.task_manager import TaskManager
     try:
         ep = get_episode(project_id, episode_id)
         if not ep:
@@ -801,6 +801,8 @@ async def run_batch_refresh(project_id: str, episode_id: str, dialogue_ids: list
         update_generation_task(project_id, task_id, status="complete", current=ok + fail)
     except Exception as e:
         update_generation_task(project_id, task_id, status="error", error=str(e))
+    finally:
+        TaskManager.release(episode_id, "refresh")
 
 
 async def run_batch_generate(project_id: str, episode_id: str, dialogue_ids: list[str], task_id: str):
@@ -808,6 +810,7 @@ async def run_batch_generate(project_id: str, episode_id: str, dialogue_ids: lis
     from app.core.store import update_generation_task
     from app.api.episodes import get_episode, get_project, _resolve_dialogue_tts_params, _download_and_save
     from app.api.episodes import submit_tts
+    from app.core.task_manager import TaskManager
     import uuid
     import asyncio
     try:
@@ -862,3 +865,5 @@ async def run_batch_generate(project_id: str, episode_id: str, dialogue_ids: lis
         update_generation_task(project_id, task_id, status="complete", current=submitted + len(failed_list))
     except Exception as e:
         update_generation_task(project_id, task_id, status="error", error=str(e))
+    finally:
+        TaskManager.release(episode_id, "generate_batch")

@@ -17,6 +17,7 @@ from app.core.store import (
     _now,
 )
 import app.core.store as store
+from app.core.task_manager import TaskManager
 
 router = APIRouter()
 
@@ -360,7 +361,7 @@ def _resolve_dialogue_tts_params(project_id: str, dlg: dict, proj: dict = None) 
 
 
 async def _download_and_save(project_id: str, episode_id: str, dialogue_id: str,
-                             task_id: str, placeholder_id: str):
+                             task_id: str, placeholder_id: str, tm_task_id: str = ""):
     """Background task: check TTS status once, download if done, otherwise leave for manual refresh."""
     try:
         result = await check_tts_status(task_id)
@@ -415,9 +416,14 @@ async def _download_and_save(project_id: str, episode_id: str, dialogue_id: str,
                                     })
                                     d["current_audio_id"] = real_id
                                     d["status"] = "completed"
+                                    # F6: 更新任务记录为完成
+                                    if tm_task_id:
+                                        TaskManager.update(project_id, tm_task_id, status="complete", current=1)
                                     return
                             break
                     break
+        # 释放锁
+        TaskManager.release(episode_id, "single_audio")
     except Exception as e:
         # 系统端异常（超时/网络/下载失败）→ 保持 generating 状态，等用户刷新重试
         # 只有 TTS 服务器明确返回 failed 才算真正失败（在 check_tts_status 里判断）
@@ -435,6 +441,10 @@ async def _download_and_save(project_id: str, episode_id: str, dialogue_id: str,
                                             a["error"] = str(e)
                                             break
                                     d["status"] = "generating"
+                                    # F6: 更新任务记录为失败/错误
+                                    if tm_task_id:
+                                        TaskManager.update(project_id, tm_task_id, status="error", error=str(e))
+                                    TaskManager.release(episode_id, "single_audio")
                                     return
                             break
                     break
@@ -457,6 +467,10 @@ async def api_generate_audio(project_id: str, episode_id: str, dialogue_id: str)
 
     proj = get_project(project_id)
 
+    # F6: 获取单条音频生成锁
+    if not TaskManager.try_acquire(project_id, episode_id, "single_audio"):
+        raise HTTPException(409, "该剧集已有音频生成任务在进行中")
+
     # 统一解析 TTS 参数（角色查找 + voice_id + instruct + style_enabled + tts_defaults）
     tts_kwargs = _resolve_dialogue_tts_params(project_id, dlg, proj)
 
@@ -464,6 +478,7 @@ async def api_generate_audio(project_id: str, episode_id: str, dialogue_id: str)
     try:
         task_id = await submit_tts(**tts_kwargs)
     except Exception as e:
+        TaskManager.release(episode_id, "single_audio")
         # Submit 失败（网络/TTS服务不可用）→ 写 interrupted 占位，等刷新时重新提交
         interrupt_id = f"gen_{uuid.uuid4().hex[:8]}"
         async with store.atomic_update() as data:
@@ -489,6 +504,9 @@ async def api_generate_audio(project_id: str, episode_id: str, dialogue_id: str)
                     break
         raise HTTPException(504, f"TTS服务不可用: {e}")
 
+    # F6: 创建任务记录
+    tm_task_id = TaskManager.create(project_id, episode_id, "single_audio", total=1)
+
     # Write placeholder with task_id, return immediately
     placeholder_id = f"gen_{uuid.uuid4().hex[:8]}"
     async with store.atomic_update() as data:
@@ -512,9 +530,9 @@ async def api_generate_audio(project_id: str, episode_id: str, dialogue_id: str)
                         break
                 break
 
-    # Kick off background download
+    # Kick off background download, pass tm_task_id for TaskManager updates
     asyncio.create_task(
-        _download_and_save(project_id, episode_id, dialogue_id, task_id, placeholder_id)
+        _download_and_save(project_id, episode_id, dialogue_id, task_id, placeholder_id, tm_task_id)
     )
 
     # Return immediately — frontend will show "生成中..."
@@ -540,6 +558,11 @@ async def api_batch_refresh_dialogues(project_id: str, episode_id: str, body: Ba
     if not ep:
         raise HTTPException(404, "Episode not found")
     total = len(body.dialogue_ids)
+
+    # F4: 加锁
+    if not TaskManager.try_acquire(project_id, episode_id, "refresh"):
+        raise HTTPException(409, "该剧集正在批量刷新，请等待完成后再试")
+
     from app.core.store import init_generation_task
     from app.core.dialogue_service import run_batch_refresh
     task_id = init_generation_task(project_id, episode_id, "refresh", total=total)
@@ -694,6 +717,10 @@ async def api_generate_batch_audio(project_id: str, episode_id: str, body: Batch
         raise HTTPException(404, "Project not found")
 
     total = len(body.dialogue_ids)
+
+    # F4: 加锁
+    if not TaskManager.try_acquire(project_id, episode_id, "generate_batch"):
+        raise HTTPException(409, "该剧集正在批量生成音频，请等待完成后再试")
 
     from app.core.store import init_generation_task
     from app.core.dialogue_service import run_batch_generate
@@ -1032,6 +1059,7 @@ async def api_import_project(project_id: str, body: ProjectImport):
 # ── LLM generation endpoints ───────────────────────────
 
 from app.core.llm import chat_json, get_llm_config
+from app.core.task_manager import TaskManager
 
 
 class EpisodeGenRequest(BaseModel):
@@ -1139,7 +1167,7 @@ async def api_regenerate_from(project_id: str, episode_id: str, body: EpisodeGen
         user_content += f"请从下一集开始，生成 {body.num_episodes} 集大纲。故事主线不变，保持角色和设定一致。"
 
     try:
-        result = chat_json([
+        result = await chat_json([
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ], max_tokens=8000)
@@ -1175,26 +1203,41 @@ async def api_regenerate_from(project_id: str, episode_id: str, body: EpisodeGen
 
 @router.post("/projects/{project_id}/generate-episodes")
 async def api_generate_episodes(project_id: str, body: EpisodeGenRequest):
-    """用 LLM 根据描述生成完整故事大纲（含故事弧线的连贯剧集结构）。"""
+    """用 LLM 根据描述生成完整故事大纲。后台任务模式（F2+F3+F5）。"""
     proj = get_project(project_id)
     if not proj:
         raise HTTPException(404, "Project not found")
 
-
     llm_cfg = get_llm_config()
     if not llm_cfg.get("base_url") or not llm_cfg.get("api_key"):
-        raise HTTPException(400, "LLM 未配置，请先填写 app/config.yaml 中的 llm.base_url 和 llm.api_key")
+        raise HTTPException(400, "LLM 未配置")
 
-    # 已有角色信息
-    chars_info = _build_chars_info(proj)
+    # F3: 单次锁定
+    if not TaskManager.try_acquire(project_id, project_id, "outline"):
+        raise HTTPException(409, "该项目正在生成大纲，请等待完成后再试")
 
-    # 已有剧集摘要（上下文记忆）
-    existing_eps = []
-    for ep in proj.get("episodes", []):
-        if ep.get("summary"):
-            existing_eps.append(f"第{proj['episodes'].index(ep) + 1}集《{ep['title']}》: {ep['summary']}")
+    task_id = TaskManager.create(project_id, project_id, "outline")
+    if not task_id:
+        TaskManager.release(project_id, "outline")
+        raise HTTPException(500, "创建任务失败")
 
-    system_prompt = """你是一个专业的编剧助手，生成完整连贯的长篇故事大纲。
+    asyncio.create_task(_bg_generate_episodes(project_id, body, task_id))
+
+    return JSONResponse({"task_id": task_id, "status": "running"})
+
+
+async def _bg_generate_episodes(project_id: str, body: EpisodeGenRequest, task_id: str):
+    """后台生成大纲（F5: 串行，F4: 超时）"""
+    try:
+        proj = get_project(project_id)
+        chars_info = _build_chars_info(proj)
+
+        existing_eps = []
+        for ep in proj.get("episodes", []):
+            if ep.get("summary"):
+                existing_eps.append(f"第{proj['episodes'].index(ep) + 1}集《{ep['title']}》: {ep['summary']}")
+
+        system_prompt = """你是一个专业的编剧助手，生成完整连贯的长篇故事大纲。
 
 规则：
 - 所有剧集构成完整故事弧线（铺垫→发展→高潮→结局）
@@ -1204,49 +1247,53 @@ async def api_generate_episodes(project_id: str, body: EpisodeGenRequest):
 
 返回 JSON：{"story_title": "故事标题（2-6个字，精炼有吸引力）", "story_arc": "一句话故事弧线", "episodes": [{"title": "纯标题，不含集数", "summary": "摘要（含角色去留变化）", "arc_phase": "铺垫|发展|高潮|结局|完整故事线"}]}"""
 
-    user_content = f"故事描述：{body.description}\n\n"
-    if chars_info:
-        user_content += f"已有角色：\n" + "\n".join(chars_info) + "\n\n"
-    if existing_eps:
-        user_content += f"已有剧集（续写时请保持连贯）：\n" + "\n".join(existing_eps) + "\n\n"
-    if body.extra:
-        user_content += f"额外要求：{body.extra}\n\n"
-    if body.num_episodes == 1:
-        user_content += f"生成 1 集大纲，这是唯一一集，需要包含完整故事线（起承转合），arc_phase 必须为「完整故事线」。"
-    else:
-        user_content += f"生成 {body.num_episodes} 集大纲。"
-
-    try:
-        result = chat_json([
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ], max_tokens=8000)
-    except Exception as e:
-        raise HTTPException(502, f"LLM 调用失败: {e}")
-
-    import re as _re
-    episodes_data = result.get("episodes", [])
-    created = []
-    for ep_data in episodes_data:
-        title = _re.sub(r'^第\s*\d+\s*集[《》]?\s*', '', ep_data.get("title", "未命名剧集")).strip() or "未命名剧集"
-        summary = ep_data.get("summary", "")
-        arc_phase = ep_data.get("arc_phase", "")
-        # 单集强制使用"完整故事线"
+        user_content = f"故事描述：{body.description}\n\n"
+        if chars_info:
+            user_content += f"已有角色：\n" + "\n".join(chars_info) + "\n\n"
+        if existing_eps:
+            user_content += f"已有剧集（续写时请保持连贯）：\n" + "\n".join(existing_eps) + "\n\n"
+        if body.extra:
+            user_content += f"额外要求：{body.extra}\n\n"
         if body.num_episodes == 1:
-            arc_phase = "完整故事线"
-        full_summary = f"[{arc_phase}] {summary}" if arc_phase else summary
-        ep = create_episode(project_id, title)
-        if ep and full_summary:
-            update_episode(project_id, ep["id"], summary=full_summary)
-        if ep:
-            created.append(ep["id"])
+            user_content += f"生成 1 集大纲，这是唯一一集，需要包含完整故事线（起承转合），arc_phase 必须为「完整故事线」。"
+        else:
+            user_content += f"生成 {body.num_episodes} 集大纲。"
 
-    return {
-        "created": len(created),
-        "episode_ids": created,
-        "story_arc": result.get("story_arc", ""),
-        "story_title": result.get("story_title", ""),
-    }
+        TaskManager.update(project_id, task_id, status="running:generating")
+
+        result = await asyncio.wait_for(
+            chat_json([
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ], max_tokens=8000),
+            timeout=300
+        )
+
+        import re as _re
+        episodes_data = result.get("episodes", [])
+        created = []
+        for ep_data in episodes_data:
+            title = _re.sub(r'^第\s*\d+\s*集[《》]?\s*', '', ep_data.get("title", "未命名剧集")).strip() or "未命名剧集"
+            summary = ep_data.get("summary", "")
+            arc_phase = ep_data.get("arc_phase", "")
+            if body.num_episodes == 1:
+                arc_phase = "完整故事线"
+            full_summary = f"[{arc_phase}] {summary}" if arc_phase else summary
+            ep = create_episode(project_id, title)
+            if ep and full_summary:
+                update_episode(project_id, ep["id"], summary=full_summary)
+            if ep:
+                created.append(ep["id"])
+
+        TaskManager.update(project_id, task_id, status="complete",
+            current=len(created), total=len(episodes_data),
+            result={"created": len(created), "episode_ids": created})
+    except asyncio.TimeoutError:
+        TaskManager.update(project_id, task_id, status="timeout", error="大纲生成超时（5分钟）")
+    except Exception as e:
+        TaskManager.update(project_id, task_id, status="error", error=str(e))
+    finally:
+        TaskManager.release(project_id, "outline")
 
 
 @router.post("/projects/{project_id}/episodes/{episode_id}/generate-dialogues")
@@ -1256,17 +1303,19 @@ async def api_generate_dialogues(project_id: str, episode_id: str, body: Dialogu
     from app.core.store import init_generation_task
     from app.core.dialogue_service import run_dialogue_generation
 
-    # 1. 获取/创建 per-project 生成锁
-    if project_id not in _gen_locks:
-        _gen_locks[project_id] = asyncio.Lock()
+    # F3: 单次锁定
+    if not TaskManager.try_acquire(project_id, episode_id, "dialogues"):
+        raise HTTPException(409, "该剧集正在生成对白，请等待完成后再试")
 
     # 2. 初始化任务记录
     task_id = init_generation_task(project_id, episode_id, "dialogue_generation")
 
     # 3. 在锁保护下启动后台任务
     async def _locked_generation():
-        async with _gen_locks[project_id]:
+        try:
             await run_dialogue_generation(project_id, episode_id, body, task_id)
+        finally:
+            TaskManager.release(episode_id, "dialogues")
 
     asyncio.create_task(_locked_generation())
 
@@ -1288,7 +1337,7 @@ async def api_get_generation_status(project_id: str, episode_id: str = None):
 
 @router.post("/projects/{project_id}/episodes/{episode_id}/generate-next")
 async def api_generate_next_episode(project_id: str, episode_id: str):
-    """根据当前剧集摘要，生成下一集的内容（摘要+对白）。"""
+    """根据当前剧集摘要，生成下一集的内容（摘要+对白）。后台任务模式。"""
     proj = get_project(project_id)
     if not proj:
         raise HTTPException(404, "Project not found")
@@ -1301,52 +1350,77 @@ async def api_generate_next_episode(project_id: str, episode_id: str):
     if not llm_cfg.get("base_url") or not llm_cfg.get("api_key"):
         raise HTTPException(400, "LLM 未配置")
 
-    # 当前剧集信息
-    current_summary = ep.get("summary", "")
-    current_dialogues = []
-    for d in ep.get("dialogues", []):
-        if d.get("text"):
-            current_dialogues.append(f"{d.get('character_name', '未知')}: {d['text']}")
+    # F3: 单次锁定
+    if not TaskManager.try_acquire(project_id, episode_id, "continuation"):
+        raise HTTPException(409, "该剧集正在续写中，请等待完成后再试")
 
-    # 前面所有剧集摘要
-    prev_summaries = []
-    for prev_ep in proj.get("episodes", []):
-        if prev_ep["id"] == episode_id:
-            break
-        if prev_ep.get("summary"):
-            prev_summaries.append(f"《{prev_ep['title']}》: {prev_ep['summary']}")
+    task_id = TaskManager.create(project_id, episode_id, "continuation")
+    if not task_id:
+        TaskManager.release(episode_id, "continuation")
+        raise HTTPException(500, "创建任务失败")
 
-    chars_info = _build_chars_info(proj)
+    asyncio.create_task(_bg_generate_next(project_id, episode_id, task_id))
+    return JSONResponse({"task_id": task_id, "status": "running"})
 
-    system_prompt = """你是一个专业的编剧助手，负责生成下一集内容。
+
+async def _bg_generate_next(project_id: str, episode_id: str, task_id: str):
+    """后台续写下一集"""
+    try:
+        proj = get_project(project_id)
+        ep = get_episode(project_id, episode_id)
+
+        current_summary = ep.get("summary", "")
+        current_dialogues = []
+        for d in ep.get("dialogues", []):
+            if d.get("text"):
+                current_dialogues.append(f"{d.get('character_name', '未知')}: {d['text']}")
+
+        prev_summaries = []
+        for prev_ep in proj.get("episodes", []):
+            if prev_ep["id"] == episode_id:
+                break
+            if prev_ep.get("summary"):
+                prev_summaries.append(f"《{prev_ep['title']}》: {prev_ep['summary']}")
+
+        chars_info = _build_chars_info(proj)
+
+        system_prompt = """你是一个专业的编剧助手，负责生成下一集内容。
 根据前情提要和当前剧情，生成下一集的标题、摘要。
 返回 JSON 格式：{"title": "下一集标题", "summary": "下一集摘要（100字以内）"}"""
 
-    user_content = f"当前剧集《{ep['title']}》摘要：{current_summary}\n\n"
-    if current_dialogues:
-        user_content += f"当前剧集对白节选：\n" + "\n".join(current_dialogues[:5]) + "\n\n"
-    if prev_summaries:
-        user_content += f"前情提要：\n" + "\n".join(prev_summaries) + "\n\n"
-    if chars_info:
-        user_content += f"已有角色：\n" + "\n".join(chars_info) + "\n\n"
-    user_content += "请生成下一集的标题和摘要。"
+        user_content = f"当前剧集《{ep['title']}》摘要：{current_summary}\n\n"
+        if current_dialogues:
+            user_content += f"当前剧集对白节选：\n" + "\n".join(current_dialogues[:5]) + "\n\n"
+        if prev_summaries:
+            user_content += f"前情提要：\n" + "\n".join(prev_summaries) + "\n\n"
+        if chars_info:
+            user_content += f"已有角色：\n" + "\n".join(chars_info) + "\n\n"
+        user_content += "请生成下一集的标题和摘要。"
 
-    try:
-        result = chat_json([
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ])
+        TaskManager.update(project_id, task_id, status="running:generating")
+
+        result = await asyncio.wait_for(
+            chat_json([
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ]),
+            timeout=300
+        )
+
+        title = result.get("title", "下一集")
+        summary = result.get("summary", "")
+        new_ep = create_episode(project_id, title)
+        if new_ep and summary:
+            update_episode(project_id, new_ep["id"], summary=summary)
+
+        TaskManager.update(project_id, task_id, status="complete",
+            result={"episode_id": new_ep["id"] if new_ep else None, "title": title, "summary": summary})
+    except asyncio.TimeoutError:
+        TaskManager.update(project_id, task_id, status="timeout", error="续写生成超时（5分钟）")
     except Exception as e:
-        raise HTTPException(502, f"LLM 调用失败: {e}")
-
-    title = result.get("title", "下一集")
-    summary = result.get("summary", "")
-
-    new_ep = create_episode(project_id, title)
-    if new_ep and summary:
-        update_episode(project_id, new_ep["id"], summary=summary)
-
-    return {"episode_id": new_ep["id"] if new_ep else None, "title": title, "summary": summary}
+        TaskManager.update(project_id, task_id, status="error", error=str(e))
+    finally:
+        TaskManager.release(episode_id, "continuation")
 
 
 # ── Batch character replacement ─────────────────────────
@@ -1452,3 +1526,15 @@ async def api_batch_replace_character(project_id: str, body: BatchReplaceCharReq
         "old_name": old_name,
         "new_name": new_name,
     }
+
+
+@router.get("/projects/{project_id}/generation-active")
+async def api_generation_active(project_id: str):
+    """查询项目是否有活跃的 LLM 生成任务。返回列表+布尔。"""
+    from app.core.task_manager import TaskManager
+    active_tasks = TaskManager.has_active_tasks(project_id)
+    return JSONResponse({
+        "active": len(active_tasks) > 0,
+        "task_count": len(active_tasks),
+        "tasks": active_tasks,
+    })
