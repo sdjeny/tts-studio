@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import * as api from "../api";
+import { api } from "../api";
 
 interface Props {
   projectId: string;
@@ -14,7 +14,7 @@ const TaskPanel: React.FC<Props> = ({ projectId }) => {
   const fetchTasks = async () => {
     setLoading(true);
     try {
-      const r = await (api as any).listLLMTasks(projectId);
+      const r = await api.listLLMTasks(projectId);
       // r.tasks might be an array or a single dict; normalize
       let list: any[] = [];
       if (Array.isArray(r.tasks)) {
