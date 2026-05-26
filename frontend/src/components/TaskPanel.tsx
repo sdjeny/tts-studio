@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { api } from "../api";
+import * as api from "../api";
 
 interface Props {
   projectId: string;
@@ -10,15 +10,6 @@ const TaskPanel: React.FC<Props> = ({ projectId }) => {
   const [loading, setLoading] = useState(false);
   const [expandedTask, setExpandedTask] = useState<string | null>(null);
   const pollingRef = useRef<number | null>(null);
-
-  const handleCancel = async (taskId: string) => {
-    try {
-      await (api as any).cancelTask(projectId, taskId);
-      await fetchTasks();
-    } catch (e: any) {
-      console.error(`Failed to cancel task ${taskId}:`, e);
-    }
-  };
 
   const fetchTasks = async () => {
     setLoading(true);
@@ -187,27 +178,6 @@ const TaskPanel: React.FC<Props> = ({ projectId }) => {
                 <span style={{ color: "#94a3b8", fontSize: 11 }}>
                   {task.current || 0}/{task.total}
                 </span>
-              )}
-              {(task.status === "running" || task.status === "pending" || task.status === "running:generating") && (
-                <button
-                  onClick={async (e) => {
-                    e.stopPropagation();
-                    await handleCancel(task.task_id || task.id);
-                  }}
-                  style={{
-                    background: "transparent",
-                    border: "1px solid #ef4444",
-                    color: "#ef4444",
-                    borderRadius: 4,
-                    padding: "2px 8px",
-                    cursor: "pointer",
-                    fontSize: 11,
-                    marginRight: 4,
-                  }}
-                  title="取消任务"
-                >
-                  🛑 取消
-                </button>
               )}
               <button onClick={() => setExpandedTask(isExpanded ? null : `${i}`)}
                 style={{ background: "none", border: "none", color: "#64748b", cursor: "pointer", fontSize: 16 }}>
