@@ -135,7 +135,7 @@ export default function ProjectList({ onSelect }: { onSelect: (id: string) => vo
                   <div style={{ fontWeight: 600, fontSize: 16 }}>{p.name}</div>
                 )}
                 <div style={{ color: "#64748b", fontSize: 12, marginTop: 4, display: "flex", gap: 12, flexWrap: "wrap" }}>
-                  <span>{p.characters.length} 角色 · {p.episodes.length} 剧集</span>
+                  <span>{(p.characters_count ?? p.characters?.length ?? 0)} 角色 · {(p.episodes_count ?? p.episodes?.length ?? 0)} 剧集</span>
                   <span style={{ color: "#475569" }}>创建: {p.created_at?.slice(0, 16) || "时间未知"}</span>
                   <span style={{ color: "#475569" }}>修改: {(p.updated_at || p.created_at)?.slice(0, 16) || "时间未知"}</span>
                 </div>
