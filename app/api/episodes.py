@@ -17,6 +17,7 @@ from app.core.store import (
     _now,
 )
 import app.core.store as store
+from app.core.task_manager import TaskManager
 
 router = APIRouter()
 
@@ -360,7 +361,7 @@ def _resolve_dialogue_tts_params(project_id: str, dlg: dict, proj: dict = None) 
 
 
 async def _download_and_save(project_id: str, episode_id: str, dialogue_id: str,
-                             task_id: str, placeholder_id: str):
+                             task_id: str, placeholder_id: str, tm_task_id: str = ""):
     """Background task: check TTS status once, download if done, otherwise leave for manual refresh."""
     try:
         result = await check_tts_status(task_id)
@@ -415,9 +416,14 @@ async def _download_and_save(project_id: str, episode_id: str, dialogue_id: str,
                                     })
                                     d["current_audio_id"] = real_id
                                     d["status"] = "completed"
+                                    # F6: 更新任务记录为完成
+                                    if tm_task_id:
+                                        TaskManager.update(project_id, tm_task_id, status="complete", current=1)
                                     return
                             break
                     break
+        # 释放锁
+        TaskManager.release(episode_id, "single_audio")
     except Exception as e:
         # 系统端异常（超时/网络/下载失败）→ 保持 generating 状态，等用户刷新重试
         # 只有 TTS 服务器明确返回 failed 才算真正失败（在 check_tts_status 里判断）
@@ -435,6 +441,10 @@ async def _download_and_save(project_id: str, episode_id: str, dialogue_id: str,
                                             a["error"] = str(e)
                                             break
                                     d["status"] = "generating"
+                                    # F6: 更新任务记录为失败/错误
+                                    if tm_task_id:
+                                        TaskManager.update(project_id, tm_task_id, status="error", error=str(e))
+                                    TaskManager.release(episode_id, "single_audio")
                                     return
                             break
                     break
@@ -457,6 +467,10 @@ async def api_generate_audio(project_id: str, episode_id: str, dialogue_id: str)
 
     proj = get_project(project_id)
 
+    # F6: 获取单条音频生成锁
+    if not TaskManager.try_acquire(project_id, episode_id, "single_audio"):
+        raise HTTPException(409, "该剧集已有音频生成任务在进行中")
+
     # 统一解析 TTS 参数（角色查找 + voice_id + instruct + style_enabled + tts_defaults）
     tts_kwargs = _resolve_dialogue_tts_params(project_id, dlg, proj)
 
@@ -464,6 +478,7 @@ async def api_generate_audio(project_id: str, episode_id: str, dialogue_id: str)
     try:
         task_id = await submit_tts(**tts_kwargs)
     except Exception as e:
+        TaskManager.release(episode_id, "single_audio")
         # Submit 失败（网络/TTS服务不可用）→ 写 interrupted 占位，等刷新时重新提交
         interrupt_id = f"gen_{uuid.uuid4().hex[:8]}"
         async with store.atomic_update() as data:
@@ -489,6 +504,9 @@ async def api_generate_audio(project_id: str, episode_id: str, dialogue_id: str)
                     break
         raise HTTPException(504, f"TTS服务不可用: {e}")
 
+    # F6: 创建任务记录
+    tm_task_id = TaskManager.create(project_id, episode_id, "single_audio", total=1)
+
     # Write placeholder with task_id, return immediately
     placeholder_id = f"gen_{uuid.uuid4().hex[:8]}"
     async with store.atomic_update() as data:
@@ -512,9 +530,9 @@ async def api_generate_audio(project_id: str, episode_id: str, dialogue_id: str)
                         break
                 break
 
-    # Kick off background download
+    # Kick off background download, pass tm_task_id for TaskManager updates
     asyncio.create_task(
-        _download_and_save(project_id, episode_id, dialogue_id, task_id, placeholder_id)
+        _download_and_save(project_id, episode_id, dialogue_id, task_id, placeholder_id, tm_task_id)
     )
 
     # Return immediately — frontend will show "生成中..."
@@ -540,6 +558,11 @@ async def api_batch_refresh_dialogues(project_id: str, episode_id: str, body: Ba
     if not ep:
         raise HTTPException(404, "Episode not found")
     total = len(body.dialogue_ids)
+
+    # F4: 加锁
+    if not TaskManager.try_acquire(project_id, episode_id, "refresh"):
+        raise HTTPException(409, "该剧集正在批量刷新，请等待完成后再试")
+
     from app.core.store import init_generation_task
     from app.core.dialogue_service import run_batch_refresh
     task_id = init_generation_task(project_id, episode_id, "refresh", total=total)
@@ -694,6 +717,10 @@ async def api_generate_batch_audio(project_id: str, episode_id: str, body: Batch
         raise HTTPException(404, "Project not found")
 
     total = len(body.dialogue_ids)
+
+    # F4: 加锁
+    if not TaskManager.try_acquire(project_id, episode_id, "generate_batch"):
+        raise HTTPException(409, "该剧集正在批量生成音频，请等待完成后再试")
 
     from app.core.store import init_generation_task
     from app.core.dialogue_service import run_batch_generate
