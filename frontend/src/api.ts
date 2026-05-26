@@ -103,6 +103,8 @@ export interface Project {
   episodes: Episode[];
   created_at: string;
   updated_at?: string;
+  characters_count?: number;
+  episodes_count?: number;
   tts_defaults?: TtsDefaults;  // 项目级 TTS 参数（旧项目可能不存在）
 }
 

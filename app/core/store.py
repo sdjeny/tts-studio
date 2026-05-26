@@ -103,7 +103,7 @@ def _write_index(data: dict) -> None:
 
 def _index_add_project(project_id: str, name: str, updated_at: str) -> None:
     idx = _read_index()
-    idx["projects"].append({"id": project_id, "name": name, "updated_at": updated_at})
+    idx["projects"].append({"id": project_id, "name": name, "updated_at": updated_at, "characters_count": 0, "episodes_count": 0})
     _write_index(idx)
 
 
@@ -113,12 +113,15 @@ def _index_remove_project(project_id: str) -> None:
     _write_index(idx)
 
 
-def _index_update_project(project_id: str, name: str | None = None, updated_at: str | None = None) -> None:
+def _index_update_project(project_id: str, name: str | None = None, updated_at: str | None = None,
+                          characters_count: int | None = None, episodes_count: int | None = None) -> None:
     idx = _read_index()
     for p in idx["projects"]:
         if p["id"] == project_id:
             if name is not None: p["name"] = name
             if updated_at is not None: p["updated_at"] = updated_at
+            if characters_count is not None: p["characters_count"] = characters_count
+            if episodes_count is not None: p["episodes_count"] = episodes_count
             break
     _write_index(idx)
 
@@ -173,21 +176,19 @@ def list_projects() -> list[dict]:
     _ensure_data_dir()
     idx = _read_index()
     projects = idx.get("projects", [])
-    # 保留 migration 逻辑：从文件读取完整项目检查旧字段
+    # 兼容旧索引：缺 counts 的从项目文件补一次
     dirty = False
     for entry in projects:
-        pid = entry["id"]
-        p = _read_project(pid)
-        if p is None:
-            continue
-        if not p.get("updated_at"):
-            p["updated_at"] = p.get("created_at", "")
-            _write_project(pid, p)
-            entry["updated_at"] = p["updated_at"]
-            dirty = True
-        if not p.get("tts_defaults"):
-            p["tts_defaults"] = _load_tts_defaults()
-            _write_project(pid, p)
+        if "characters_count" not in entry:
+            p = _read_project(entry["id"])
+            if p is None:
+                continue
+            entry["characters_count"] = len(p.get("characters", []))
+            entry["episodes_count"] = len(p.get("episodes", []))
+            entry["updated_at"] = entry.get("updated_at") or p.get("created_at", "")
+            if not p.get("tts_defaults"):
+                p["tts_defaults"] = _load_tts_defaults()
+                _write_project(entry["id"], p)
             dirty = True
     if dirty:
         _write_index(idx)
@@ -308,6 +309,7 @@ def add_character(project_id: str, name: str, voice_id: str, speed: float = 1.0,
     char.update(extra)
     project["characters"].append(char)
     _write_project(project_id, project)
+    _index_update_project(project_id, characters_count=len(project["characters"]))
     return char
 
 
@@ -331,6 +333,7 @@ def delete_character(project_id: str, char_id: str) -> bool:
     project["characters"] = [c for c in project["characters"] if c["id"] != char_id]
     if len(project["characters"]) < before:
         _write_project(project_id, project)
+        _index_update_project(project_id, characters_count=len(project["characters"]))
         return True
     return False
 
@@ -381,6 +384,7 @@ def create_episode(project_id: str, title: str, raw_text: str = "") -> dict | No
     }
     project["episodes"].append(ep)
     _write_project(project_id, project)
+    _index_update_project(project_id, episodes_count=len(project["episodes"]))
     return ep
 
 
@@ -404,6 +408,7 @@ def delete_episode(project_id: str, episode_id: str) -> bool:
     project["episodes"] = [ep for ep in project["episodes"] if ep["id"] != episode_id]
     if len(project["episodes"]) < before:
         _write_project(project_id, project)
+        _index_update_project(project_id, episodes_count=len(project["episodes"]))
         return True
     return False
 
