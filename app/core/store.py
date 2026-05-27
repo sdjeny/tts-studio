@@ -213,7 +213,7 @@ def list_projects() -> list[dict]:
                 p["gen_defaults"] = _load_gen_defaults()
                 _write_project(entry["id"], p)
             if not p.get("story_settings"):
-                p["story_settings"] = {"description": "", "extra": "", "story_arc": "", "step": ""}
+                p["story_settings"] = {"description": "", "extra": "", "story_arc": ""}
                 _write_project(entry["id"], p)
             dirty = True
     if dirty:
@@ -248,7 +248,6 @@ def create_project(name: str) -> dict:
             "description": "",
             "extra": "",
             "story_arc": "",
-            "step": "",
         },
     }
     _write_project(pid, project)

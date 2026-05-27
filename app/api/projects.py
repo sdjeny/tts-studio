@@ -47,7 +47,6 @@ class StorySettings(BaseModel):
     description: str | None = None
     extra: str | None = None
     story_arc: str | None = None
-    step: str | None = None
 
 
 class ProjectUpdate(BaseModel):
