@@ -119,10 +119,7 @@ function AIGenPanel({ project, onChange, onError }: {
 }) {
   // 如果项目已有剧集摘要，初始直接进入 Step2 编辑大纲
   const hasExistingOutline = project.episodes.length > 0 && project.episodes.some(e => e.summary);
-  const savedStep = project.story_settings?.step as AIGenStep | undefined;
-  const [step, setStep] = useState<AIGenStep>(
-    savedStep && ["setup", "outline", "dialogues"].includes(savedStep) ? savedStep : (hasExistingOutline ? "outline" : "setup")
-  );
+  const [step, setStep] = useState<AIGenStep>(hasExistingOutline ? "outline" : "setup");
   const [description, setDescription] = useState(project.story_settings?.description || "");
   const [extra, setExtra] = useState(project.story_settings?.extra || "");
   const genDefaults = project.gen_defaults || { num_episodes: 3, target_duration_min: 25, narration_ratio: 50 };
@@ -160,13 +157,12 @@ function AIGenPanel({ project, onChange, onError }: {
         description,
         extra,
         story_arc: storyArc,
-        step,
       }).catch((e: any) => onError(`自动保存失败: ${e.message}`));
     }, 800);
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
-  }, [description, extra, storyArc, step]);
+  }, [description, extra, storyArc]);
 
   // 编辑标题/摘要实时写盘（统一数据源，无需独立状态 + 保存按钮）
   const updateOutlineItem = async (id: string, field: "title" | "summary", value: string) => {

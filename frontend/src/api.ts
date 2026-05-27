@@ -103,7 +103,6 @@ export interface StorySettings {
   description: string;
   extra: string;
   story_arc: string;
-  step: string;  // "setup" | "outline" | "dialogues"
 }
 
 export interface VoiceInfo {
