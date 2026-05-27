@@ -209,12 +209,19 @@ def list_projects() -> list[dict]:
             if not p.get("tts_defaults"):
                 p["tts_defaults"] = _load_tts_defaults()
                 _write_project(entry["id"], p)
-            if not p.get("gen_defaults"):
-                p["gen_defaults"] = _load_gen_defaults()
-                _write_project(entry["id"], p)
-            if not p.get("story_settings"):
-                p["story_settings"] = {"description": "", "extra": "", "story_arc": ""}
-                _write_project(entry["id"], p)
+            dirty = True
+
+        # 项目文件字段 backfill：独立检查，不依赖索引字段存在性
+        p = _read_project(entry["id"])
+        if p is None:
+            continue
+        if not p.get("gen_defaults"):
+            p["gen_defaults"] = _load_gen_defaults()
+            _write_project(entry["id"], p)
+            dirty = True
+        if not p.get("story_settings"):
+            p["story_settings"] = {"description": "", "extra": "", "story_arc": ""}
+            _write_project(entry["id"], p)
             dirty = True
     if dirty:
         _write_index(idx)
