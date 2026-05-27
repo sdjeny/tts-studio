@@ -9,6 +9,13 @@ All notable changes to this project will be documented in this file.
   - 直接 LLM 拆解替代原先的两步流水线
   - `parse_story_with_two_step()` 不再被主动调用
 
+## [未发布] Issue #80 — gen_defaults 可配置化
+
+### Added
+- 「默认集数」「每集时长」「旁白比例」从硬编码改为可配置的项目级 `gen_defaults` 系统设置（Refs #80）
+  - 项目设置中新增 `gen_defaults` 字段，支持自定义默认集数、每集时长和旁白比例
+  - 向后兼容：未配置时自动回退原硬编码默认值
+
 ## [未发布] PR #51 — 新增 parse_story_direct() 直接 LLM 拆解法
 
 ### Added
