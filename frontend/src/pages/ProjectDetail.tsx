@@ -122,9 +122,10 @@ function AIGenPanel({ project, onChange, onError }: {
   const [step, setStep] = useState<AIGenStep>(hasExistingOutline ? "outline" : "setup");
   const [description, setDescription] = useState("");
   const [extra, setExtra] = useState("");
-  const [numEpisodes, setNumEpisodes] = useState(6);
-  const [targetDuration, setTargetDuration] = useState(25);
-  const [narrationRatio, setNarrationRatio] = useState(50);
+  const genDefaults = project.gen_defaults || { num_episodes: 3, target_duration_min: 25, narration_ratio: 50 };
+  const [numEpisodes, setNumEpisodes] = useState(genDefaults.num_episodes);
+  const [targetDuration, setTargetDuration] = useState(genDefaults.target_duration_min);
+  const [narrationRatio, setNarrationRatio] = useState(genDefaults.narration_ratio);
   const estLines = Math.max(10, targetDuration * 60 / 4);
   const [loading, setLoading] = useState(false);
   const [projectHasActiveTask, setProjectHasActiveTask] = useState(false);

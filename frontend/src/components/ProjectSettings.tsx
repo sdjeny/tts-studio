@@ -12,7 +12,7 @@
  * - repetition_penalty（重复惩罚）：>1.0 时抑制重复模式，值越大抑制越强。
  */
 import { useState, useEffect } from "react";
-import { api, Project, TtsDefaults } from "../api";
+import { api, Project, TtsDefaults, GenDefaults } from "../api";
 import { VOICE_OPTIONS } from "../constants";
 
 // 各参数的取值范围和步长（voice_id 是字符串，单独处理）
@@ -59,6 +59,13 @@ const OFFICIAL_DEFAULTS: TtsDefaults = {
   voice_id: "aiden",
 };
 
+// 生成参数全局默认值
+const GEN_GLOBAL_DEFAULTS: GenDefaults = {
+  num_episodes: 3,
+  target_duration_min: 25,
+  narration_ratio: 50,
+};
+
 interface Props {
   project: Project;
   onChange: () => void;
@@ -75,12 +82,20 @@ export default function ProjectSettings({ project, onChange, onError }: Props) {
   const [dirty, setDirty] = useState(false);
   const [globalDefaults, setGlobalDefaults] = useState<TtsDefaults>(CONSERVATIVE_DEFAULTS);
   const [voices, setVoices] = useState<Array<{ name: string; description: string }>>(VOICE_OPTIONS);
+  // gen_defaults 状态
+  const [genValues, setGenValues] = useState<GenDefaults>(() => ({
+    ...GEN_GLOBAL_DEFAULTS,
+    ...project.gen_defaults,
+  }));
+  const [genDirty, setGenDirty] = useState(false);
 
   // 项目切换时重置
   useEffect(() => {
     setValues({ ...CONSERVATIVE_DEFAULTS, ...project.tts_defaults });
     setDirty(false);
-  }, [project.id, project.tts_defaults]);
+    setGenValues({ ...GEN_GLOBAL_DEFAULTS, ...project.gen_defaults });
+    setGenDirty(false);
+  }, [project.id, project.tts_defaults, project.gen_defaults]);
 
   // 从 API 加载全局默认值
   useEffect(() => {
@@ -126,6 +141,29 @@ export default function ProjectSettings({ project, onChange, onError }: Props) {
   const handleResetOfficial = () => {
     setValues({ ...OFFICIAL_DEFAULTS });
     setDirty(true);
+  };
+
+  const updateGenField = (field: keyof GenDefaults, val: number) => {
+    setGenValues((prev) => ({ ...prev, [field]: val }));
+    setGenDirty(true);
+  };
+
+  const handleGenSave = async () => {
+    setSaving(true);
+    try {
+      await api.updateProject(project.id, undefined, undefined, genValues);
+      onChange();
+      setGenDirty(false);
+      onError("✅ 生成参数已保存");
+    } catch (e: any) {
+      onError(`保存失败: ${e.message}`);
+    }
+    setSaving(false);
+  };
+
+  const handleGenResetToGlobal = () => {
+    setGenValues({ ...GEN_GLOBAL_DEFAULTS });
+    setGenDirty(true);
   };
 
   const sliderStyle: React.CSSProperties = {
@@ -309,7 +347,7 @@ export default function ProjectSettings({ project, onChange, onError }: Props) {
         );
       })}
 
-      {/* 保存按钮 */}
+      {/* TTS 保存按钮 */}
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <button
           onClick={handleSave}
@@ -330,6 +368,186 @@ export default function ProjectSettings({ project, onChange, onError }: Props) {
         {dirty && (
           <button
             onClick={() => { setValues({ ...CONSERVATIVE_DEFAULTS, ...project.tts_defaults }); setDirty(false); }}
+            style={{ ...btnGhost }}
+          >
+            放弃修改
+          </button>
+        )}
+      </div>
+
+      {/* 生成参数默认值 */}
+
+      {/* divider */}
+      <div style={{ height: 1, background: "#1e293b", margin: "12px 0" }} />
+
+      <div style={{
+        background: "linear-gradient(135deg, #1e1b4b 0%, #0f1117 100%)",
+        border: "1px solid #312e81",
+        borderRadius: 8,
+        padding: "14px 16px",
+      }}>
+        <div style={{ fontSize: 14, color: "#818cf8", fontWeight: 600, marginBottom: 6 }}>
+          🎬 生成参数默认值
+        </div>
+        <div style={{ fontSize: 12, color: "#94a3b8", lineHeight: 1.7 }}>
+          以下参数作为本项目生成大纲和对白时的默认值。可在 AI 生成面板中临时调整。
+        </div>
+      </div>
+
+      {/* 快捷预设 */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 12, color: "#64748b", alignSelf: "center", marginRight: 4 }}>快捷预设：</span>
+        <button onClick={handleGenResetToGlobal} style={btnPreset}>
+          🔄 恢复全局默认
+        </button>
+      </div>
+
+      {/* 默认集数 */}
+      <div style={{
+        background: "#0f1117",
+        border: "1px solid #1e293b",
+        borderRadius: 8,
+        padding: "12px 14px",
+      }}>
+        <div style={labelStyle}>
+          <label style={{ fontSize: 13, color: "#e2e8f0", fontWeight: 600 }}>
+            默认集数
+          </label>
+          <span style={{
+            fontSize: 14,
+            color: "#3b82f6",
+            fontWeight: 700,
+            fontVariantNumeric: "tabular-nums",
+            minWidth: 48,
+            textAlign: "right",
+          }}>
+            {genValues.num_episodes}
+          </span>
+        </div>
+        <div style={{ fontSize: 11, color: "#64748b", marginBottom: 8 }}>
+          生成大纲时的默认集数。
+        </div>
+        <input
+          type="number"
+          min={1}
+          max={99}
+          step={1}
+          value={genValues.num_episodes}
+          onChange={(e) => updateGenField("num_episodes", Math.max(1, Math.min(99, parseInt(e.target.value) || 3)))}
+          style={{
+            width: 80,
+            padding: "8px 10px",
+            background: "#1e293b",
+            color: "#e2e8f0",
+            border: "1px solid #334155",
+            borderRadius: 6,
+            fontSize: 13,
+            outline: "none",
+          }}
+        />
+      </div>
+
+      {/* 每集时长(min) */}
+      <div style={{
+        background: "#0f1117",
+        border: "1px solid #1e293b",
+        borderRadius: 8,
+        padding: "12px 14px",
+      }}>
+        <div style={labelStyle}>
+          <label style={{ fontSize: 13, color: "#e2e8f0", fontWeight: 600 }}>
+            每集时长 (min)
+          </label>
+          <span style={{
+            fontSize: 14,
+            color: "#3b82f6",
+            fontWeight: 700,
+            fontVariantNumeric: "tabular-nums",
+            minWidth: 48,
+            textAlign: "right",
+          }}>
+            {genValues.target_duration_min}
+          </span>
+        </div>
+        <div style={{ fontSize: 11, color: "#64748b", marginBottom: 8 }}>
+          每集对白生成的目标时长。
+        </div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <span style={{ fontSize: 10, color: "#475569" }}>1</span>
+          <input
+            type="range"
+            min={1}
+            max={120}
+            step={5}
+            value={genValues.target_duration_min}
+            onChange={(e) => updateGenField("target_duration_min", parseInt(e.target.value))}
+            style={sliderStyle}
+          />
+          <span style={{ fontSize: 10, color: "#475569" }}>120</span>
+        </div>
+      </div>
+
+      {/* 旁白比例 */}
+      <div style={{
+        background: "#0f1117",
+        border: "1px solid #1e293b",
+        borderRadius: 8,
+        padding: "12px 14px",
+      }}>
+        <div style={labelStyle}>
+          <label style={{ fontSize: 13, color: "#e2e8f0", fontWeight: 600 }}>
+            旁白比例 (%)
+          </label>
+          <span style={{
+            fontSize: 14,
+            color: "#3b82f6",
+            fontWeight: 700,
+            fontVariantNumeric: "tabular-nums",
+            minWidth: 48,
+            textAlign: "right",
+          }}>
+            {genValues.narration_ratio}%
+          </span>
+        </div>
+        <div style={{ fontSize: 11, color: "#64748b", marginBottom: 8 }}>
+          旁白占比，剩余为对白。0%=纯对白，100%=纯旁白。
+        </div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <span style={{ fontSize: 10, color: "#475569" }}>0%</span>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={10}
+            value={genValues.narration_ratio}
+            onChange={(e) => updateGenField("narration_ratio", parseInt(e.target.value))}
+            style={sliderStyle}
+          />
+          <span style={{ fontSize: 10, color: "#475569" }}>100%</span>
+        </div>
+      </div>
+
+      {/* 保存按钮 */}
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <button
+          onClick={handleGenSave}
+          disabled={saving || !genDirty}
+          style={{
+            padding: "10px 28px",
+            background: genDirty ? "#3b82f6" : "#334155",
+            color: genDirty ? "#fff" : "#64748b",
+            border: "none",
+            borderRadius: 8,
+            cursor: saving ? "wait" : genDirty ? "pointer" : "default",
+            fontWeight: 600,
+            fontSize: 14,
+          }}
+        >
+          {saving ? "⏳ 保存中..." : genDirty ? "💾 保存设置" : "✓ 已保存"}
+        </button>
+        {genDirty && (
+          <button
+            onClick={() => { setGenValues({ ...GEN_GLOBAL_DEFAULTS, ...project.gen_defaults }); setGenDirty(false); }}
             style={{ ...btnGhost }}
           >
             放弃修改
