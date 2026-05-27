@@ -42,10 +42,19 @@ class GenDefaults(BaseModel):
     narration_ratio: int | None = None  # Field(ge=0, le=100)
 
 
+class StorySettings(BaseModel):
+    """故事设定字段。所有字段可选，None 表示不更新该字段。"""
+    description: str | None = None
+    extra: str | None = None
+    story_arc: str | None = None
+    step: str | None = None
+
+
 class ProjectUpdate(BaseModel):
     name: str | None = None
     tts_defaults: TtsDefaults | None = None
     gen_defaults: GenDefaults | None = None
+    story_settings: StorySettings | None = None
 
 
 class CharacterCreate(BaseModel):
@@ -108,6 +117,10 @@ async def api_update_project(project_id: str, body: ProjectUpdate):
         gen_fields = {k: v for k, v in body.gen_defaults.model_dump().items() if v is not None}
         if gen_fields:
             extra["gen_defaults"] = gen_fields
+    if body.story_settings is not None:
+        story_fields = {k: v for k, v in body.story_settings.model_dump().items() if v is not None}
+        if story_fields:
+            extra["story_settings"] = story_fields
     p = update_project(project_id, name=body.name, **extra)
     if not p:
         raise HTTPException(404, "Project not found")

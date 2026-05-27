@@ -119,9 +119,12 @@ function AIGenPanel({ project, onChange, onError }: {
 }) {
   // 如果项目已有剧集摘要，初始直接进入 Step2 编辑大纲
   const hasExistingOutline = project.episodes.length > 0 && project.episodes.some(e => e.summary);
-  const [step, setStep] = useState<AIGenStep>(hasExistingOutline ? "outline" : "setup");
-  const [description, setDescription] = useState("");
-  const [extra, setExtra] = useState("");
+  const savedStep = project.story_settings?.step as AIGenStep | undefined;
+  const [step, setStep] = useState<AIGenStep>(
+    savedStep && ["setup", "outline", "dialogues"].includes(savedStep) ? savedStep : (hasExistingOutline ? "outline" : "setup")
+  );
+  const [description, setDescription] = useState(project.story_settings?.description || "");
+  const [extra, setExtra] = useState(project.story_settings?.extra || "");
   const genDefaults = project.gen_defaults || { num_episodes: 3, target_duration_min: 25, narration_ratio: 50 };
   const [numEpisodes, setNumEpisodes] = useState(genDefaults.num_episodes);
   const [targetDuration, setTargetDuration] = useState(genDefaults.target_duration_min);
@@ -129,11 +132,12 @@ function AIGenPanel({ project, onChange, onError }: {
   const estLines = Math.max(10, targetDuration * 60 / 4);
   const [loading, setLoading] = useState(false);
   const [projectHasActiveTask, setProjectHasActiveTask] = useState(false);
-  const [storyArc, setStoryArc] = useState("");
+  const [storyArc, setStoryArc] = useState(project.story_settings?.story_arc || "");
   const [genDialoguesFor, setGenDialoguesFor] = useState<string[]>([]);
   const [selectAllEpisodes, setSelectAllEpisodes] = useState(false);
   // 直接派生，无需独立状态 — 统一数据源自 project.episodes
   const episodesWithSummary = project.episodes.filter(e => e.summary);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // 检查剧集是否已有对白
   const hasDialogues = (epId: string) => {
@@ -143,10 +147,26 @@ function AIGenPanel({ project, onChange, onError }: {
 
   // 组件挂载时检查项目是否有活跃 LLM 任务
   useEffect(() => {
-    (api as any).getGenerationActive(project.id).then(r => {
+    (api as any).getGenerationActive(project.id).then((r: any) => {
       setProjectHasActiveTask(r.active);
     }).catch(() => {});
   }, [project.id]);
+
+  // auto‑save story_settings with debounce
+  useEffect(() => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      api.updateProject(project.id, undefined, undefined, undefined, {
+        description,
+        extra,
+        story_arc: storyArc,
+        step,
+      }).catch((e: any) => onError(`自动保存失败: ${e.message}`));
+    }, 800);
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, [description, extra, storyArc, step]);
 
   // 编辑标题/摘要实时写盘（统一数据源，无需独立状态 + 保存按钮）
   const updateOutlineItem = async (id: string, field: "title" | "summary", value: string) => {
@@ -230,7 +250,7 @@ function AIGenPanel({ project, onChange, onError }: {
     }
     setLoading(false);
     // 重新检查活跃状态
-    (api as any).getGenerationActive(project.id).then(r => {
+    (api as any).getGenerationActive(project.id).then((r: any) => {
       setProjectHasActiveTask(r.active);
     }).catch(() => {});
   };

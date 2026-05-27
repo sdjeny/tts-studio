@@ -98,6 +98,14 @@ export interface GenDefaults {
   narration_ratio: number;      // 旁白比例 (%)
 }
 
+/** AI 生成面板的持久化状态 */
+export interface StorySettings {
+  description: string;
+  extra: string;
+  story_arc: string;
+  step: string;  // "setup" | "outline" | "dialogues"
+}
+
 export interface VoiceInfo {
   name: string;
   description: string;
@@ -114,6 +122,7 @@ export interface Project {
   episodes_count?: number;
   tts_defaults?: TtsDefaults;  // 项目级 TTS 参数（旧项目可能不存在）
   gen_defaults?: GenDefaults;  // 项目级生成参数（旧项目可能不存在）
+  story_settings?: StorySettings;
 }
 
 // ── API ─────────────────────────────────────────────────
@@ -130,13 +139,14 @@ export const api = {
   getProject: (id: string) => request<Project>(`/projects/${id}`),
   createProject: (name: string) =>
     request<Project>("/projects", { method: "POST", body: JSON.stringify({ name }) }),
-  updateProject: (id: string, name?: string, tts_defaults?: Partial<TtsDefaults>, gen_defaults?: Partial<GenDefaults>) =>
+  updateProject: (id: string, name?: string, tts_defaults?: Partial<TtsDefaults>, gen_defaults?: Partial<GenDefaults>, story_settings?: Partial<StorySettings>) =>
     request<Project>(`/projects/${id}`, {
       method: "PATCH",
       body: JSON.stringify({
         ...(name !== undefined && { name }),
         ...(tts_defaults !== undefined && { tts_defaults }),
         ...(gen_defaults !== undefined && { gen_defaults }),
+        ...(story_settings !== undefined && { story_settings }),
       }),
     }),
   deleteProject: (id: string) =>
