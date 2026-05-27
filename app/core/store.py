@@ -212,6 +212,9 @@ def list_projects() -> list[dict]:
             if not p.get("gen_defaults"):
                 p["gen_defaults"] = _load_gen_defaults()
                 _write_project(entry["id"], p)
+            if not p.get("story_settings"):
+                p["story_settings"] = {"description": "", "extra": "", "story_arc": "", "step": ""}
+                _write_project(entry["id"], p)
             dirty = True
     if dirty:
         _write_index(idx)
@@ -240,6 +243,13 @@ def create_project(name: str) -> dict:
         # ── 项目级生成默认值 ──────────────────────────────────
         # 控制生成剧集数量、目标时长、旁白比例等。
         "gen_defaults": _load_gen_defaults(),
+        # ── 故事设定 ─────────────────────────────────────────
+        "story_settings": {
+            "description": "",
+            "extra": "",
+            "story_arc": "",
+            "step": "",
+        },
     }
     _write_project(pid, project)
     _index_add_project(pid, name, now)
