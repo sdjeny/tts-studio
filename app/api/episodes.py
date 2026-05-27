@@ -1223,9 +1223,6 @@ async def api_generate_episodes(project_id: str, body: EpisodeGenRequest):
     if not proj:
         raise HTTPException(404, "Project not found")
 
-    # 从 project.gen_defaults 解析 num_episodes
-    num_episodes = _resolve_gen_param(proj, body, "num_episodes", 3)
-
     llm_cfg = get_llm_config()
     if not llm_cfg.get("base_url") or not llm_cfg.get("api_key"):
         raise HTTPException(400, "LLM 未配置")
@@ -1272,7 +1269,7 @@ async def _bg_generate_episodes(project_id: str, body: EpisodeGenRequest, task_i
             user_content += f"已有剧集（续写时请保持连贯）：\n" + "\n".join(existing_eps) + "\n\n"
         if body.extra:
             user_content += f"额外要求：{body.extra}\n\n"
-        # 从 project.gen_defaults 解析 num_episodes（已在调用端 resolve，此处用 body 值兜底）
+        # 从 project.gen_defaults 解析 num_episodes（body.num_episodes 仍为 None，需二次 resolve）
         num_episodes = _resolve_gen_param(proj, body, "num_episodes", 3)
         if num_episodes == 1:
             user_content += f"生成 1 集大纲，这是唯一一集，需要包含完整故事线（起承转合），arc_phase 必须为「完整故事线」。"
