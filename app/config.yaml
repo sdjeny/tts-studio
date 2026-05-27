@@ -15,3 +15,10 @@ llm:
 
 tts:
   base_url: "http://localhost:8420"
+
+# 生成默认值（集数、时长、旁白比例等）
+gen:
+  defaults:
+    num_episodes: 3
+    target_duration_min: 25
+    narration_ratio: 50

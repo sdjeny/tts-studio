@@ -91,6 +91,13 @@ export interface TtsDefaults {
   voice_id: string;          // 默认音色，可选: aiden/dylan/eric/ono_anna/ryan/serena/sohee/uncle_fu/vivian
 }
 
+/** 项目级生成参数默认值（大纲/对白生成） */
+export interface GenDefaults {
+  num_episodes: number;         // 默认集数
+  target_duration_min: number;  // 每集时长 (分钟)
+  narration_ratio: number;      // 旁白比例 (%)
+}
+
 export interface VoiceInfo {
   name: string;
   description: string;
@@ -106,6 +113,7 @@ export interface Project {
   characters_count?: number;
   episodes_count?: number;
   tts_defaults?: TtsDefaults;  // 项目级 TTS 参数（旧项目可能不存在）
+  gen_defaults?: GenDefaults;  // 项目级生成参数（旧项目可能不存在）
 }
 
 // ── API ─────────────────────────────────────────────────
@@ -122,12 +130,13 @@ export const api = {
   getProject: (id: string) => request<Project>(`/projects/${id}`),
   createProject: (name: string) =>
     request<Project>("/projects", { method: "POST", body: JSON.stringify({ name }) }),
-  updateProject: (id: string, name?: string, tts_defaults?: Partial<TtsDefaults>) =>
+  updateProject: (id: string, name?: string, tts_defaults?: Partial<TtsDefaults>, gen_defaults?: Partial<GenDefaults>) =>
     request<Project>(`/projects/${id}`, {
       method: "PATCH",
       body: JSON.stringify({
         ...(name !== undefined && { name }),
         ...(tts_defaults !== undefined && { tts_defaults }),
+        ...(gen_defaults !== undefined && { gen_defaults }),
       }),
     }),
   deleteProject: (id: string) =>

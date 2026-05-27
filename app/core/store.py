@@ -38,6 +38,26 @@ def _load_tts_defaults() -> dict:
         pass
     return _CONSERVATIVE
 
+
+def _load_gen_defaults() -> dict:
+    """从 config.yaml 读取 gen.defaults，fallback 到保守默认值。"""
+    _CONSERVATIVE = {
+        "num_episodes": 3,
+        "target_duration_min": 25,
+        "narration_ratio": 50,
+    }
+    try:
+        if _CONFIG_PATH.exists():
+            with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+                cfg = _yaml.safe_load(f) or {}
+            gen_defaults = cfg.get("gen", {}).get("defaults")
+            if gen_defaults and isinstance(gen_defaults, dict):
+                merged = {**_CONSERVATIVE, **gen_defaults}
+                return merged
+    except Exception:
+        pass
+    return _CONSERVATIVE
+
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 DATA_FILE = DATA_DIR / "studio.json"
 
@@ -189,6 +209,9 @@ def list_projects() -> list[dict]:
             if not p.get("tts_defaults"):
                 p["tts_defaults"] = _load_tts_defaults()
                 _write_project(entry["id"], p)
+            if not p.get("gen_defaults"):
+                p["gen_defaults"] = _load_gen_defaults()
+                _write_project(entry["id"], p)
             dirty = True
     if dirty:
         _write_index(idx)
@@ -214,6 +237,9 @@ def create_project(name: str) -> dict:
         # 当对白生成音频时未显式指定采样参数，则使用此处的值。
         # 保守默认值旨在最小化不同句子间的声音波动。
         "tts_defaults": _load_tts_defaults(),
+        # ── 项目级生成默认值 ──────────────────────────────────
+        # 控制生成剧集数量、目标时长、旁白比例等。
+        "gen_defaults": _load_gen_defaults(),
     }
     _write_project(pid, project)
     _index_add_project(pid, name, now)

@@ -35,9 +35,17 @@ class TtsDefaults(BaseModel):
     repetition_penalty: float | None = None
 
 
+class GenDefaults(BaseModel):
+    """项目级生成默认值。所有字段可选，None 表示不更新该字段。"""
+    num_episodes: int | None = None  # Field(ge=1, le=99)
+    target_duration_min: int | None = None  # Field(ge=1, le=120)
+    narration_ratio: int | None = None  # Field(ge=0, le=100)
+
+
 class ProjectUpdate(BaseModel):
     name: str | None = None
     tts_defaults: TtsDefaults | None = None
+    gen_defaults: GenDefaults | None = None
 
 
 class CharacterCreate(BaseModel):
@@ -96,6 +104,10 @@ async def api_update_project(project_id: str, body: ProjectUpdate):
         tts_fields = {k: v for k, v in body.tts_defaults.model_dump().items() if v is not None}
         if tts_fields:
             extra["tts_defaults"] = tts_fields
+    if body.gen_defaults is not None:
+        gen_fields = {k: v for k, v in body.gen_defaults.model_dump().items() if v is not None}
+        if gen_fields:
+            extra["gen_defaults"] = gen_fields
     p = update_project(project_id, name=body.name, **extra)
     if not p:
         raise HTTPException(404, "Project not found")

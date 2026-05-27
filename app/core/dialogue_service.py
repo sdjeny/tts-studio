@@ -241,7 +241,7 @@ class DialogueGenerator:
 
         # T4: 可配置参数
         target_duration_min = getattr(body, 'target_duration_min', 25)
-        narration_ratio = getattr(body, 'narration_ratio', 20)
+        narration_ratio = getattr(body, 'narration_ratio', 50)
         style = getattr(body, 'style', '')
         temperature = getattr(body, 'temperature', 0.7)
         word_count = int(target_duration_min * 260)

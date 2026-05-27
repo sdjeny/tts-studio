@@ -1064,19 +1064,31 @@ from app.core.task_manager import TaskManager
 
 class EpisodeGenRequest(BaseModel):
     description: str = ""  # 故事描述 / 走向微调指令（可选，留空则基于前情自动续写）
-    num_episodes: int = 3  # 生成几集
+    num_episodes: int | None = None  # 生成几集（None = 从 project.gen_defaults 读取）
     extra: str = ""  # 额外要求（可选）
 
 
 class DialogueGenRequest(BaseModel):
     instruction: str = ""  # 额外指令（可选）
-    target_duration_min: int = 25  # 目标时长（分钟），默认 25
-    narration_ratio: int = 50  # 旁白比例 0-100，默认 50
+    target_duration_min: int | None = None  # 目标时长（分钟）（None = 从 project.gen_defaults 读取）
+    narration_ratio: int | None = None  # 旁白比例 0-100（None = 从 project.gen_defaults 读取）
     style: str = ""  # 故事风格（可选）
     temperature: float = 0.7  # LLM 温度（默认 0.7）
 
 
 # ── Regenerate outline from a specific episode ──────────
+
+def _resolve_gen_param(proj: dict, body, param_name: str, fallback):
+    """从 project.gen_defaults 解析生成参数。
+    
+    优先级链：请求体显式值 > project.gen_defaults > 硬编码 fallback。
+    """
+    gen_defaults = proj.get("gen_defaults", {})
+    body_val = getattr(body, param_name, None)
+    if body_val is not None:
+        return body_val
+    return gen_defaults.get(param_name, fallback)
+
 
 @router.post("/projects/{project_id}/regenerate-from/{episode_id}")
 async def api_regenerate_from(project_id: str, episode_id: str, body: EpisodeGenRequest):
@@ -1089,6 +1101,9 @@ async def api_regenerate_from(project_id: str, episode_id: str, body: EpisodeGen
     proj = get_project(project_id)
     if not proj:
         raise HTTPException(404, "Project not found")
+
+    # 从 project.gen_defaults 解析 num_episodes
+    num_episodes = _resolve_gen_param(proj, body, "num_episodes", 3)
 
 
     # 找到指定集在列表中的索引
@@ -1161,10 +1176,10 @@ async def api_regenerate_from(project_id: str, episode_id: str, body: EpisodeGen
         user_content += f"前情提要（请在此基础上续写，保持故事连贯）：\n" + "\n".join(existing_eps) + "\n\n"
     if body.extra:
         user_content += f"额外要求：{body.extra}\n\n"
-    if body.num_episodes == 1:
+    if num_episodes == 1:
         user_content += f"请从下一集开始，生成 1 集大纲。这是唯一一集，需要包含完整故事线（起承转合），arc_phase 必须为「完整故事线」。故事主线不变，保持角色和设定一致。"
     else:
-        user_content += f"请从下一集开始，生成 {body.num_episodes} 集大纲。故事主线不变，保持角色和设定一致。"
+        user_content += f"请从下一集开始，生成 {num_episodes} 集大纲。故事主线不变，保持角色和设定一致。"
 
     try:
         result = await chat_json([
@@ -1183,7 +1198,7 @@ async def api_regenerate_from(project_id: str, episode_id: str, body: EpisodeGen
         summary = ep_data.get("summary", "")
         arc_phase = ep_data.get("arc_phase", "")
         # 单集强制使用"完整故事线"
-        if body.num_episodes == 1:
+        if num_episodes == 1:
             arc_phase = "完整故事线"
         full_summary = f"[{arc_phase}] {summary}" if arc_phase else summary
         ep = create_episode(project_id, title)
@@ -1207,6 +1222,9 @@ async def api_generate_episodes(project_id: str, body: EpisodeGenRequest):
     proj = get_project(project_id)
     if not proj:
         raise HTTPException(404, "Project not found")
+
+    # 从 project.gen_defaults 解析 num_episodes
+    num_episodes = _resolve_gen_param(proj, body, "num_episodes", 3)
 
     llm_cfg = get_llm_config()
     if not llm_cfg.get("base_url") or not llm_cfg.get("api_key"):
@@ -1254,10 +1272,12 @@ async def _bg_generate_episodes(project_id: str, body: EpisodeGenRequest, task_i
             user_content += f"已有剧集（续写时请保持连贯）：\n" + "\n".join(existing_eps) + "\n\n"
         if body.extra:
             user_content += f"额外要求：{body.extra}\n\n"
-        if body.num_episodes == 1:
+        # 从 project.gen_defaults 解析 num_episodes（已在调用端 resolve，此处用 body 值兜底）
+        num_episodes = _resolve_gen_param(proj, body, "num_episodes", 3)
+        if num_episodes == 1:
             user_content += f"生成 1 集大纲，这是唯一一集，需要包含完整故事线（起承转合），arc_phase 必须为「完整故事线」。"
         else:
-            user_content += f"生成 {body.num_episodes} 集大纲。"
+            user_content += f"生成 {num_episodes} 集大纲。"
 
         TaskManager.update(project_id, task_id, status="running:generating")
 
@@ -1276,7 +1296,7 @@ async def _bg_generate_episodes(project_id: str, body: EpisodeGenRequest, task_i
             title = _re.sub(r'^第\s*\d+\s*集[《》]?\s*', '', ep_data.get("title", "未命名剧集")).strip() or "未命名剧集"
             summary = ep_data.get("summary", "")
             arc_phase = ep_data.get("arc_phase", "")
-            if body.num_episodes == 1:
+            if num_episodes == 1:
                 arc_phase = "完整故事线"
             full_summary = f"[{arc_phase}] {summary}" if arc_phase else summary
             ep = create_episode(project_id, title)
@@ -1302,6 +1322,18 @@ async def api_generate_dialogues(project_id: str, episode_id: str, body: Dialogu
     改为后台任务模式，立即返回 task_id，前端轮询 /generation-status 获取进度。"""
     from app.core.store import init_generation_task
     from app.core.dialogue_service import run_dialogue_generation
+
+    proj = get_project(project_id)
+    if not proj:
+        raise HTTPException(404, "Project not found")
+
+    # 从 project.gen_defaults 解析生成参数
+    target_duration_min = _resolve_gen_param(proj, body, "target_duration_min", 25)
+    narration_ratio = _resolve_gen_param(proj, body, "narration_ratio", 50)
+
+    # 构建带 resolve 值的 body（前台任务通过 getattr 读取）
+    body.target_duration_min = target_duration_min
+    body.narration_ratio = narration_ratio
 
     # F3: 单次锁定
     if not TaskManager.try_acquire(project_id, episode_id, "dialogues"):
