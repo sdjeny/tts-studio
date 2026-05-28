@@ -223,11 +223,16 @@ def list_projects() -> list[dict]:
             p["story_settings"] = {"description": "", "extra": "", "story_arc": ""}
             _write_project(entry["id"], p)
             dirty = True
-        if "default_style_enabled" not in p:
-            p["default_style_enabled"] = False
-            dirty = True
     if dirty:
         _write_index(idx)
+    # 补充 characters/episodes 数组字段供前端消费（索引只存 count，前端 .length 需要数组）
+    for entry in projects:
+        p = _read_project(entry["id"])
+        if p is None:
+            continue
+        entry["characters"] = p.get("characters", [])
+        entry["episodes"] = p.get("episodes", [])
+        entry["created_at"] = p.get("created_at", "")
     return sorted(projects, key=lambda p: p.get("updated_at", ""), reverse=True)
 
 
@@ -259,8 +264,6 @@ def create_project(name: str) -> dict:
             "extra": "",
             "story_arc": "",
         },
-        # ── 新建剧集/对白默认风格开关 ────────────────────────
-        "default_style_enabled": False,
     }
     _write_project(pid, project)
     _index_add_project(pid, name, now)
@@ -424,7 +427,7 @@ def create_episode(project_id: str, title: str, raw_text: str = "") -> dict | No
         "id": _uid(),
         "title": title,
         "summary": "",
-        "style_enabled": project.get("default_style_enabled", False),  # 从项目配置读取默认值
+        "style_enabled": False,  # 剧集默认关闭风格
         "created_at": _now(),
         "dialogues": [],
         "raw_text": raw_text,
@@ -490,7 +493,7 @@ def add_dialogue(project_id: str, episode_id: str, character_id: str,
                 "text": text,
                 "summary": "",
                 "instruct": instruct,
-                "style_enabled": project.get("default_style_enabled", False),  # 从项目配置读取默认值
+                "style_enabled": False,  # True=角色风格+场景情绪, False=仅角色风格（默认关闭）
                 "order": order,
                 "status": "pending",  # pending | generating | completed | failed
                 "audio_history": [],   # [{id, url, filename, created_at}]
@@ -587,7 +590,7 @@ def insert_dialogue_after(project_id: str, episode_id: str, after_dialogue_id: s
                 "text": text,
                 "summary": "",
                 "instruct": instruct,
-                "style_enabled": project.get("default_style_enabled", False),  # 从项目配置读取默认值
+                "style_enabled": False,
                 "order": new_order,
                 "status": "pending",
                 "audio_history": [],
