@@ -54,6 +54,7 @@ class ProjectUpdate(BaseModel):
     tts_defaults: TtsDefaults | None = None
     gen_defaults: GenDefaults | None = None
     story_settings: StorySettings | None = None
+    default_style_enabled: bool | None = None
 
 
 class CharacterCreate(BaseModel):
@@ -120,6 +121,8 @@ async def api_update_project(project_id: str, body: ProjectUpdate):
         story_fields = {k: v for k, v in body.story_settings.model_dump().items() if v is not None}
         if story_fields:
             extra["story_settings"] = story_fields
+    if body.default_style_enabled is not None:
+        extra["default_style_enabled"] = body.default_style_enabled
     p = update_project(project_id, name=body.name, **extra)
     if not p:
         raise HTTPException(404, "Project not found")

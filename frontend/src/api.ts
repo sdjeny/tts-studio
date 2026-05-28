@@ -122,6 +122,7 @@ export interface Project {
   tts_defaults?: TtsDefaults;  // 项目级 TTS 参数（旧项目可能不存在）
   gen_defaults?: GenDefaults;  // 项目级生成参数（旧项目可能不存在）
   story_settings?: StorySettings;
+  default_style_enabled?: boolean;
 }
 
 // ── API ─────────────────────────────────────────────────
@@ -138,7 +139,7 @@ export const api = {
   getProject: (id: string) => request<Project>(`/projects/${id}`),
   createProject: (name: string) =>
     request<Project>("/projects", { method: "POST", body: JSON.stringify({ name }) }),
-  updateProject: (id: string, name?: string, tts_defaults?: Partial<TtsDefaults>, gen_defaults?: Partial<GenDefaults>, story_settings?: Partial<StorySettings>) =>
+  updateProject: (id: string, name?: string, tts_defaults?: Partial<TtsDefaults>, gen_defaults?: Partial<GenDefaults>, story_settings?: Partial<StorySettings>, default_style_enabled?: boolean) =>
     request<Project>(`/projects/${id}`, {
       method: "PATCH",
       body: JSON.stringify({
@@ -146,6 +147,7 @@ export const api = {
         ...(tts_defaults !== undefined && { tts_defaults }),
         ...(gen_defaults !== undefined && { gen_defaults }),
         ...(story_settings !== undefined && { story_settings }),
+        ...(default_style_enabled !== undefined && { default_style_enabled }),
       }),
     }),
   deleteProject: (id: string) =>

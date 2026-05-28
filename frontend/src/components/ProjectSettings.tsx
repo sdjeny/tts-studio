@@ -375,6 +375,47 @@ export default function ProjectSettings({ project, onChange, onError }: Props) {
         )}
       </div>
 
+      {/* 风格开关默认值 */}
+      <div style={{
+        background: "#0f1117",
+        border: "1px solid #1e293b",
+        borderRadius: 8,
+        padding: "12px 14px",
+      }}>
+        <div style={labelStyle}>
+          <label style={{ fontSize: 13, color: "#e2e8f0", fontWeight: 600 }}>
+            🎭 新建剧集/对白默认风格开关
+          </label>
+          <button
+            onClick={async () => {
+              const newVal = !project.default_style_enabled;
+              try {
+                await api.updateProject(project.id, undefined, undefined, undefined, undefined, newVal);
+                onChange();
+              } catch (e: any) {
+                onError(`保存失败: ${e.message}`);
+              }
+            }}
+            style={{
+              fontSize: 12,
+              padding: "3px 10px",
+              borderRadius: 4,
+              border: "1px solid",
+              borderColor: project.default_style_enabled ? "#f59e0b" : "#334155",
+              background: project.default_style_enabled ? "#f59e0b22" : "transparent",
+              color: project.default_style_enabled ? "#f59e0b" : "#64748b",
+              cursor: "pointer",
+              fontWeight: 600,
+            }}
+          >
+            🎭 风格{project.default_style_enabled ? "开" : "关"}
+          </button>
+        </div>
+        <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>
+          控制新建剧集和对白时 style_enabled 的默认值。开启后，新剧集和新对白默认启用风格模式（角色风格+场景情绪）。
+        </div>
+      </div>
+
       {/* 生成参数默认值 */}
 
       {/* divider */}
