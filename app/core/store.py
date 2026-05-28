@@ -231,6 +231,8 @@ def list_projects() -> list[dict]:
         if p is None:
             continue
         entry["characters"] = p.get("characters", [])
+        entry["gen_defaults"] = p.get("gen_defaults", {})
+        entry["story_settings"] = p.get("story_settings", {})
         entry["episodes"] = p.get("episodes", [])
         entry["created_at"] = p.get("created_at", "")
     return sorted(projects, key=lambda p: p.get("updated_at", ""), reverse=True)
