@@ -223,6 +223,10 @@ def list_projects() -> list[dict]:
             p["story_settings"] = {"description": "", "extra": "", "story_arc": ""}
             _write_project(entry["id"], p)
             dirty = True
+        if "default_style_enabled" not in p:
+            p["default_style_enabled"] = False
+            _write_project(entry["id"], p)
+            dirty = True
     if dirty:
         _write_index(idx)
     # 补充 characters/episodes 数组字段供前端消费（索引只存 count，前端 .length 需要数组）
@@ -233,6 +237,7 @@ def list_projects() -> list[dict]:
         entry["characters"] = p.get("characters", [])
         entry["gen_defaults"] = p.get("gen_defaults", {})
         entry["story_settings"] = p.get("story_settings", {})
+        entry["default_style_enabled"] = p.get("default_style_enabled", False)
         entry["episodes"] = p.get("episodes", [])
         entry["created_at"] = p.get("created_at", "")
         entry["tts_defaults"] = p.get("tts_defaults", {})
@@ -267,6 +272,7 @@ def create_project(name: str) -> dict:
             "extra": "",
             "story_arc": "",
         },
+        "default_style_enabled": False,
     }
     _write_project(pid, project)
     _index_add_project(pid, name, now)
@@ -430,7 +436,7 @@ def create_episode(project_id: str, title: str, raw_text: str = "") -> dict | No
         "id": _uid(),
         "title": title,
         "summary": "",
-        "style_enabled": False,  # 剧集默认关闭风格
+        "style_enabled": project.get("default_style_enabled", False),  # 继承项目默认值
         "created_at": _now(),
         "dialogues": [],
         "raw_text": raw_text,
@@ -496,7 +502,7 @@ def add_dialogue(project_id: str, episode_id: str, character_id: str,
                 "text": text,
                 "summary": "",
                 "instruct": instruct,
-                "style_enabled": False,  # True=角色风格+场景情绪, False=仅角色风格（默认关闭）
+                "style_enabled": project.get("default_style_enabled", False),  # 继承项目默认值
                 "order": order,
                 "status": "pending",  # pending | generating | completed | failed
                 "audio_history": [],   # [{id, url, filename, created_at}]
