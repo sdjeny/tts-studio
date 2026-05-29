@@ -235,6 +235,7 @@ def list_projects() -> list[dict]:
         entry["story_settings"] = p.get("story_settings", {})
         entry["episodes"] = p.get("episodes", [])
         entry["created_at"] = p.get("created_at", "")
+        entry["tts_defaults"] = p.get("tts_defaults", {})
     return sorted(projects, key=lambda p: p.get("updated_at", ""), reverse=True)
 
 

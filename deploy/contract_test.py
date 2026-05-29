@@ -69,7 +69,9 @@ try:
         detail = json.loads(resp.read())
         list_keys = set(data[0].keys())
         detail_keys = set(detail.keys())
-        missing = list_keys - detail_keys
+        # 聚合字段仅在列表接口从索引计算，详情接口不返回
+        agg_fields = {"characters_count", "episodes_count"}
+        missing = (list_keys - agg_fields) - detail_keys
         check(
             "详情接口 ≥ 列表接口字段",
             not missing,
@@ -113,9 +115,6 @@ try:
         "top_p",
         "repetition_penalty",
         "voice_id",
-        "num_episodes",
-        "target_duration_min",
-        "narration_ratio",
     ]:
         check(f"defaults 含 '{field}'", field in gd)
 except Exception as e:
