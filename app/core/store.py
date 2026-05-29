@@ -599,7 +599,7 @@ def insert_dialogue_after(project_id: str, episode_id: str, after_dialogue_id: s
                 "text": text,
                 "summary": "",
                 "instruct": instruct,
-                "style_enabled": False,
+                "style_enabled": project.get("default_style_enabled", False),
                 "order": new_order,
                 "status": "pending",
                 "audio_history": [],
