@@ -96,7 +96,7 @@ export default function ProjectDetail({ projectId, onBack }: { projectId: string
       <div style={{ display: "flex", gap: 4, marginBottom: 20 }}>
         {(["ai", "characters", "episodes", "tasks", "settings"] as Tab[]).map((t) => (
           <button key={t} onClick={() => setTab(t)} style={tab === t ? btnTabActive : btnTab}>
-            {t === "ai" ? "🤖 AI 生成" : t === "episodes" ? "📺 剧集" : t === "characters" ? "🎭 角色" : t === "tasks" ? "📋 LLM 任务" : "⚙️ 项目设置"}
+            {t === "ai" ? "🤖 AI 生成" : t === "episodes" ? "📺 剧集" : t === "characters" ? "🎭 角色" : t === "tasks" ? "📋 后台任务" : "⚙️ 项目设置"}
           </button>
         ))}
       </div>

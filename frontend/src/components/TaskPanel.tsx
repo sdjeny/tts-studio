@@ -9,6 +9,7 @@ const TaskPanel: React.FC<Props> = ({ projectId }) => {
   const [tasks, setTasks] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [expandedTask, setExpandedTask] = useState<string | null>(null);
+  const [cancellingMap, setCancellingMap] = useState<Record<string, boolean>>({});
   const pollingRef = useRef<number | null>(null);
 
   const fetchTasks = async () => {
@@ -54,6 +55,35 @@ const TaskPanel: React.FC<Props> = ({ projectId }) => {
       }
     };
   }, [projectId]);
+
+  const handleCancelTask = async (taskId: string) => {
+    if (cancellingMap[taskId]) return;
+    setCancellingMap(prev => ({ ...prev, [taskId]: true }));
+    try {
+      await api.cancelLLMTask(projectId, taskId);
+      await fetchTasks();
+    } catch (e: any) {
+      const msg = e.message || "";
+      if (msg.includes("404:")) {
+        await fetchTasks();
+        return;
+      }
+      if (msg.includes("409:")) {
+        try {
+          const body = msg.slice(4);
+          const parsed = JSON.parse(body);
+          alert(parsed.detail || body);
+        } catch {
+          alert(msg.slice(4));
+        }
+        await fetchTasks();
+        return;
+      }
+      alert(msg || "取消失败");
+    } finally {
+      setCancellingMap(prev => ({ ...prev, [taskId]: false }));
+    }
+  };
 
   const getStatusStyle = (status: string) => {
     switch (status) {
@@ -127,6 +157,17 @@ const TaskPanel: React.FC<Props> = ({ projectId }) => {
     transition: "width 0.5s ease",
   });
 
+  const cancelBtnStyle: React.CSSProperties = {
+    background: "transparent",
+    border: "1px solid #ef4444",
+    color: "#ef4444",
+    borderRadius: 4,
+    padding: "2px 8px",
+    cursor: "pointer",
+    fontSize: 11,
+    fontWeight: 500,
+  };
+
   const btnStyle: React.CSSProperties = {
     background: "transparent", border: "1px solid #334155",
     color: "#94a3b8", borderRadius: 6, padding: "4px 12px",
@@ -174,6 +215,19 @@ const TaskPanel: React.FC<Props> = ({ projectId }) => {
                 {task.created_at?.slice(5, 16) || task.updated_at?.slice(5, 16) || ""}
               </span>
               <div style={{ flex: 1 }} />
+              {(task.status === "running" || task.status === "running:generating" || task.status === "pending") && (
+                <button
+                  onClick={() => handleCancelTask(task.id || task.task_id)}
+                  disabled={cancellingMap[task.id || task.task_id]}
+                  style={{
+                    ...cancelBtnStyle,
+                    color: cancellingMap[task.id || task.task_id] ? "#9ca3af" : "#ef4444",
+                    cursor: cancellingMap[task.id || task.task_id] ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {cancellingMap[task.id || task.task_id] ? "⏳ 终止中..." : "✕ 终止"}
+                </button>
+              )}
               {task.total && task.total > 0 && (
                 <span style={{ color: "#94a3b8", fontSize: 11 }}>
                   {task.current || 0}/{task.total}

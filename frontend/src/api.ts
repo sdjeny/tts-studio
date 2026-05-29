@@ -382,6 +382,9 @@ export const api = {
   getLLMTask: (pid: string, taskId: string) =>
     request<any>(`/projects/${pid}/llm/task/${taskId}`),
 
+  cancelLLMTask: (pid: string, taskId: string) =>
+    request<any>(`/projects/${pid}/llm/task/${taskId}/cancel`, { method: "POST" }),
+
   generateNextEpisode: (pid: string, eid: string) =>
     request<{ episode_id: string; title: string; summary: string }>(
       `/projects/${pid}/episodes/${eid}/generate-next`,
