@@ -391,7 +391,6 @@ async def _download_and_save(project_id: str, episode_id: str, dialogue_id: str,
         with open(filepath, "wb") as f:
             f.write(audio_data)
         audio_url = f"/static/audio/{filename}"
-        is_raw = True
 
         # Replace placeholder with real record
         real_id = f"audio_{uuid.uuid4().hex[:8]}"
@@ -411,7 +410,8 @@ async def _download_and_save(project_id: str, episode_id: str, dialogue_id: str,
                                         "url": audio_url,
                                         "filename": filename,
                                         "created_at": _now(),
-                                        "raw": is_raw,
+                                        "effects_source_id": None,
+                                        "effects_checksum": None,
                                         "duration": _audio_duration(str(filepath)),
                                     })
                                     d["current_audio_id"] = real_id
@@ -636,7 +636,8 @@ async def _refresh_single_dialogue(project_id: str, episode_id: str, dlg: dict):
                 "url": f"/static/audio/{filename}",
                 "filename": filename,
                 "created_at": _now(),
-                "raw": True,
+                "effects_source_id": None,
+                "effects_checksum": None,
                 "duration": _audio_duration(str(filepath)),
             })
             return True
@@ -960,40 +961,106 @@ async def api_apply_effects(project_id: str, episode_id: str, dialogue_id: str):
     if not effects:
         raise HTTPException(400, "该角色没有配置音效，请先在角色面板添加音效")
 
-    # 应用音效，生成新文件
+    from app.core.audio_effects import compute_effects_checksum, apply_effects_to_file
+    checksum = compute_effects_checksum(effects)
+
+    # 确定原音 ID 和文件路径
+    raw_audio_id = current_ah.get("effects_source_id") or current_ah["id"]
+    # 找原音文件
+    raw_ah = current_ah if raw_audio_id == current_ah["id"] else None
+    for ah in dlg.get("audio_history", []):
+        if ah["id"] == raw_audio_id:
+            raw_ah = ah
+            break
+    if not raw_ah:
+        raise HTTPException(404, "原始音频记录不存在")
+    src_filename = raw_ah.get("filename", "")
+    src_path = AUDIO_DIR / src_filename
+    if not src_path.exists():
+        raise HTTPException(404, "原始音频文件不存在于磁盘")
+
+    # 查找已有同 source 的效果音
+    existing_fx = None
+    for ah in dlg.get("audio_history", []):
+        if (ah.get("effects_source_id") == raw_audio_id
+                and ah.get("effects_checksum") is not None):
+            existing_fx = ah
+            break
+
+    # 1) existing_fx + checksum 相同 → 跳过
+    if existing_fx and existing_fx.get("effects_checksum") == checksum:
+        async with store.atomic_update() as data:
+            for p in data["projects"]:
+                if p["id"] == project_id:
+                    for ep_in in p["episodes"]:
+                        if ep_in["id"] == episode_id:
+                            for d in ep_in["dialogues"]:
+                                if d["id"] == dialogue_id:
+                                    d["current_audio_id"] = existing_fx["id"]
+                                    d["status"] = "completed"
+                                    return {"skipped": True, "message": "音效链未变化，跳过处理"}
+                            break
+                    break
+
+    # 2) existing_fx + checksum 不同 → 替换 / 3) 无 existing_fx → 新增
     try:
-        from app.core.audio_effects import apply_effects_to_file
         new_filename = f"fx_{uuid.uuid4().hex[:8]}.wav"
         new_filepath = AUDIO_DIR / new_filename
         apply_effects_to_file(str(src_path), str(new_filepath), effects)
     except Exception as e:
         raise HTTPException(500, f"音效处理失败: {e}")
 
-    # 添加新历史记录并起效
-    new_id = f"audio_{uuid.uuid4().hex[:8]}"
-    audio_url = f"/static/audio/{new_filename}"
-    async with store.atomic_update() as data:
-        for p in data["projects"]:
-            if p["id"] == project_id:
-                for ep_in in p["episodes"]:
-                    if ep_in["id"] == episode_id:
-                        for d in ep_in["dialogues"]:
-                            if d["id"] == dialogue_id:
-                                d["audio_history"].append({
-                                    "id": new_id,
-                                    "url": audio_url,
-                                    "filename": new_filename,
-                                    "created_at": _now(),
-                                    "raw": False,
-                                    "duration": _audio_duration(str(new_filepath)),
-                                })
-                                d["current_audio_id"] = new_id
-                                d["status"] = "completed"
-                                return get_episode(project_id, episode_id)
-                        break
-                break
-
-    raise HTTPException(500, "更新数据失败")
+    if existing_fx:
+        # 替换：删除旧文件，更新记录
+        old_fn = existing_fx.get("filename", "")
+        old_fp = AUDIO_DIR / old_fn
+        if old_fp.exists():
+            os.remove(str(old_fp))
+        async with store.atomic_update() as data:
+            for p in data["projects"]:
+                if p["id"] == project_id:
+                    for ep_in in p["episodes"]:
+                        if ep_in["id"] == episode_id:
+                            for d in ep_in["dialogues"]:
+                                if d["id"] == dialogue_id:
+                                    for a in d["audio_history"]:
+                                        if a["id"] == existing_fx["id"]:
+                                            a["url"] = f"/static/audio/{new_filename}"
+                                            a["filename"] = new_filename
+                                            a["created_at"] = _now()
+                                            a["effects_checksum"] = checksum
+                                            a["duration"] = _audio_duration(str(new_filepath))
+                                            break
+                                    d["current_audio_id"] = existing_fx["id"]
+                                    d["status"] = "completed"
+                                    return get_episode(project_id, episode_id)
+                            break
+                    break
+    else:
+        # 新增
+        new_id = f"audio_{uuid.uuid4().hex[:8]}"
+        audio_url = f"/static/audio/{new_filename}"
+        async with store.atomic_update() as data:
+            for p in data["projects"]:
+                if p["id"] == project_id:
+                    for ep_in in p["episodes"]:
+                        if ep_in["id"] == episode_id:
+                            for d in ep_in["dialogues"]:
+                                if d["id"] == dialogue_id:
+                                    d["audio_history"].append({
+                                        "id": new_id,
+                                        "url": audio_url,
+                                        "filename": new_filename,
+                                        "created_at": _now(),
+                                        "effects_source_id": raw_audio_id,
+                                        "effects_checksum": checksum,
+                                        "duration": _audio_duration(str(new_filepath)),
+                                    })
+                                    d["current_audio_id"] = new_id
+                                    d["status"] = "completed"
+                                    return get_episode(project_id, episode_id)
+                            break
+                    break
 
 
 # ── import / export endpoints ──────────────────────────

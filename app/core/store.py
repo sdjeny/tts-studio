@@ -472,6 +472,68 @@ def delete_episode(project_id: str, episode_id: str) -> bool:
     return False
 
 
+# ─── Audio History Migration ─────────────────────────────────
+
+def migrate_audio_history_raw_fields(project_id: str) -> dict:
+    """
+    数据迁移：将 audio_history 中的 raw 字段替换为 effects_source_id + effects_checksum。
+    raw: true  → effects_source_id: None, effects_checksum: None
+    raw: false → effects_source_id: <同 dialogue 中最新 raw:true 的条目 ID>, effects_checksum: None
+    返回统计: {"migrated": N, "already_migrated": M}
+    幂等：重复执行不会重复迁移。
+    """
+    project = _read_project(project_id)
+    if project is None:
+        return {"error": "project not found"}
+
+    migrated = 0
+    already_migrated = 0
+
+    for ep in project["episodes"]:
+        for dlg in ep.get("dialogues", []):
+            history = dlg.get("audio_history", [])
+            if not history:
+                continue
+
+            # 找所有原音（raw: true）的 ID
+            raw_audio_ids = [
+                ah["id"] for ah in history
+                if ah.get("raw") is True or ah.get("effects_source_id") is None
+            ]
+            latest_raw_id = raw_audio_ids[-1] if raw_audio_ids else None
+
+            needs_write = False
+            for ah in history:
+                has_old = "raw" in ah
+                has_new = "effects_source_id" in ah
+
+                if has_new and not has_old:
+                    already_migrated += 1
+                    continue
+
+                if not has_old:
+                    ah["effects_source_id"] = None
+                    ah["effects_checksum"] = None
+                    needs_write = True
+                    already_migrated += 1
+                    continue
+
+                if ah.get("raw") is True:
+                    ah["effects_source_id"] = None
+                    ah["effects_checksum"] = None
+                else:
+                    ah["effects_source_id"] = latest_raw_id
+                    ah["effects_checksum"] = None
+                del ah["raw"]
+                needs_write = True
+                migrated += 1
+
+            if needs_write:
+                _write_project(project_id, project)
+
+    return {"migrated": migrated, "already_migrated": already_migrated}
+
+
 # ─── Dialogues ───────────────────────────────────────────────
 
 def episode_dialogues(project_id: str, episode_id: str) -> list[dict]:
@@ -687,7 +749,8 @@ def delete_episode_all_dialogues(project_id: str, episode_id: str) -> tuple[bool
 
 
 def add_audio_to_history(project_id: str, episode_id: str, dialogue_id: str,
-                         audio_url: str, filename: str = "") -> dict | None:
+                         audio_url: str, filename: str = "",
+                         effects_source_id=None, effects_checksum=None) -> dict | None:
     """Add a new audio entry to a dialogue's history and set as current."""
     project = _read_project(project_id)
     if project is None:
@@ -701,6 +764,8 @@ def add_audio_to_history(project_id: str, episode_id: str, dialogue_id: str,
                         "url": audio_url,
                         "filename": filename or audio_url.split("/")[-1],
                         "created_at": _now(),
+                        "effects_source_id": effects_source_id,
+                        "effects_checksum": effects_checksum,
                     }
                     dlg["audio_history"].append(entry)
                     dlg["current_audio_id"] = entry["id"]

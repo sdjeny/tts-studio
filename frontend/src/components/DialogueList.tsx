@@ -438,8 +438,8 @@ function DialogueRow({ dlg, index, onGenerate, onRefresh, onClearHistory, onDown
               ) : (
                 <span style={{ color: "#ef4444", fontSize: 11, fontStyle: "italic" }}>❌ {ah.error || "生成失败"}</span>
               )}
-              {ah.raw ? (
-                <span style={{ color: "#64748b", fontSize: 10, fontStyle: "italic" }}>原始</span>
+              {ah.effects_source_id === undefined || ah.effects_source_id === null ? (
+                <span style={{ color: "#4ade80", fontSize: 10 }}>原音</span>
               ) : (
                 <span style={{ color: "#a78bfa", fontSize: 10 }}>已音效</span>
               )}
