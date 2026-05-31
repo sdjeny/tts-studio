@@ -10,7 +10,7 @@ _project_locks: dict[str, asyncio.Lock] = {}
 
 
 class TaskManager:
-    TASK_TYPES = ("outline", "dialogues", "continuation", "generate_batch", "refresh", "single_audio")
+    TASK_TYPES = ("outline", "dialogues", "continuation", "generate_batch", "refresh", "single_audio", "apply_effects")  # #103: 新增音效应用任务类型
     
     @staticmethod
     def create(project_id: str, episode_id: str, task_type: str, total: int = 0) -> str:

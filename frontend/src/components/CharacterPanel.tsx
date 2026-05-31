@@ -91,12 +91,15 @@ export default function CharacterPanel({ project, onChange, onError }: {
 
   const [applyingEffects, setApplyingEffects] = useState<string | null>(null);
 
-  const applyEffectsToEpisode = async (cId: string) => {
+  const applyEffectsToEpisode = async (cId: string) => { // #103: show task count, remove await onChange
     setApplyingEffects(cId);
     try {
       const res = await api.applyEffectsToEpisode(project.id, cId);
-      alert(`音效应用完成：${res.applied} 条对白已处理，${res.skipped} 条跳过`);
-      await onChange();
+      if (res.total > 0) {
+        alert(`已创建 ${res.total} 个音效处理任务（${res.skipped} 条跳过），请在任务面板查看进度`);
+      } else {
+        alert(`所有对白音效已是最新，无需处理（${res.skipped} 条跳过）`);
+      }
     } catch (e: any) { onError("应用音效失败: " + e.message); }
     finally { setApplyingEffects(null); }
   };
@@ -178,7 +181,7 @@ export default function CharacterPanel({ project, onChange, onError }: {
                           disabled={applyingEffects === ch.id}
                           title="将该角色的音效应用到所有剧集的所有对白"
                         >
-                          {applyingEffects === ch.id ? "⏳ 应用中..." : "✨ 应用音效到全部剧集"}
+                          {applyingEffects === ch.id ? "⏳ 创建任务..." : "✨ 应用音效到全部剧集"} // #103: button text
                         </button>
                       )}
                       <button onClick={() => setEditing(ch.id)} style={smallBtn}>编辑</button>

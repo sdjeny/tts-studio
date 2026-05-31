@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse
 
+import asyncio
 import uuid as _uuid
 from app.api import projects, episodes, timeline, voices, config as config_api, task_routes
 import app.core.store as _store
@@ -109,9 +110,81 @@ async def health():
     return {"status": "ok"}
 
 
+# #103: 对白音效应用决策函数 — 定位→对比→决策
+# 根据 #100 设计：effects_source_id 定位原音血缘，effects_checksum 判断音效链是否变更
+def _decide_dialogue_effect(dialogue: dict, checksum: str) -> dict:
+    """对单个对白执行「定位→对比→决策」。
+
+    对应 Issue: #103
+    设计说明: 根据 #100 的 effects_source_id + effects_checksum 设计，
+    判断对白是否需要重新应用音效。返回 action=skip/process，process 时带 mode。
+
+    Args:
+        dialogue: 对白对象（含 current_audio_id, audio_history）
+        checksum: 当前角色音效链的 MD5 校验码
+
+    Returns:
+        {"action": "skip"} — 无需处理
+        {"action": "process", "mode": "create"|"add"|"replace", "raw_audio_id": str|None}
+    """
+    current_audio_id = dialogue.get("current_audio_id")
+    if not current_audio_id:
+        # 无音频：后续生成时自动用角色音效，但先创建任务占位
+        return {"action": "process", "mode": "create", "raw_audio_id": None}
+
+    audio_history = dialogue.get("audio_history", [])
+    current_ah = next((ah for ah in audio_history if ah["id"] == current_audio_id), None)
+    if not current_ah:
+        return {"action": "skip"}
+
+    effects_source_id = current_ah.get("effects_source_id")
+
+    if effects_source_id is not None:
+        # 当前已是效果音 — Bug #103 修复：必须对比 checksum，不能直接跳过
+        if current_ah.get("effects_checksum") == checksum:
+            # 音效链没变，跳过
+            return {"action": "skip"}
+        else:
+            # #103 Bug 修复：checksum 不同，需要替换效果音
+            # effects_source_id 指向原音 ID
+            raw_id = current_ah.get("effects_source_id")
+            return {"action": "process", "mode": "replace", "raw_audio_id": raw_id}
+    else:
+        # 当前是原音（effects_source_id is None）
+        # 检查是否已有附加效果音记录
+        existing_fx = next(
+            (ah for ah in audio_history
+             if ah.get("effects_source_id") == current_audio_id
+             and ah.get("effects_checksum") is not None),
+            None
+        )
+        if existing_fx and existing_fx.get("effects_checksum") == checksum:
+            # 已有相同 checksum 的效果音，跳过
+            return {"action": "skip"}
+        else:
+            # 首次附加效果音或 checksum 不同
+            return {"action": "process", "mode": "add", "raw_audio_id": current_audio_id}
+
+
+# #103: 重写为异步批量创建后台任务
+# 旧版 bug: 1) 无音频对白直接跳过 2) effects_source_id!=null 直接跳过不对比 checksum
+# 新版: 遍历所有对白 → 决策 → 创建后台任务 → 异步串行执行
 async def api_apply_effects_to_all(project_id: str, char_id: str):
-    """对项目中指定角色的所有对白批量应用当前角色音效链。"""
-    from app.core.audio_effects import apply_effects_to_file, compute_effects_checksum
+    """对项目中指定角色的所有对白批量创建音效应用后台任务。
+
+    对应 Issue: #103
+    设计说明: 改为异步模式 — 同步遍历对白创建任务，后台串行执行音频处理。
+    每个对白独立一个任务，可在后台任务面板查看进度。
+
+    Args:
+        project_id: 项目 ID
+        char_id: 角色 ID
+    Returns:
+        {"task_ids": [...], "total": N, "skipped": M}
+    """
+    from app.core.audio_effects import compute_effects_checksum
+    from app.core.task_manager import TaskManager
+
     proj = get_project(project_id)
     if not proj:
         raise HTTPException(404, "Project not found")
@@ -130,80 +203,181 @@ async def api_apply_effects_to_all(project_id: str, char_id: str):
 
     checksum = compute_effects_checksum(effects)
 
-    applied = 0
+    task_ids = []
     skipped = 0
     data = _store._read()
     for p in data["projects"]:
-        if p["id"] == project_id:
-            for ep_in in p["episodes"]:
-                for d in ep_in.get("dialogues", []):
-                    dlg_cid = d.get("character_id")
-                    if dlg_cid != char_id:
-                        continue
-                    current_audio_id = d.get("current_audio_id")
-                    if not current_audio_id:
-                        skipped += 1
-                        continue
-                    current_ah = None
-                    for ah in d.get("audio_history", []):
-                        if ah["id"] == current_audio_id:
-                            current_ah = ah
-                            break
-                    if not current_ah:
-                        skipped += 1
-                        continue
-                    if current_ah.get("effects_source_id") is not None:
-                        skipped += 1
-                        continue
-                    raw_audio_id = current_ah["id"]
-                    src_filename = current_ah.get("filename", "")
-                    if not src_filename:
-                        skipped += 1
-                        continue
-                    src_path = AUDIO_DIR / src_filename
-                    if not src_path.exists():
-                        skipped += 1
-                        continue
+        if p["id"] != project_id:
+            continue
+        for ep_in in p["episodes"]:
+            for d in ep_in.get("dialogues", []):
+                if d.get("character_id") != char_id:
+                    continue
 
-                    existing_fx = None
-                    for ah in d.get("audio_history", []):
-                        if (ah.get("effects_source_id") == raw_audio_id
-                                and ah.get("effects_checksum") is not None):
-                            existing_fx = ah
-                            break
+                decision = _decide_dialogue_effect(d, checksum)
+                if decision["action"] == "skip":
+                    skipped += 1
+                    continue
 
-                    if existing_fx and existing_fx.get("effects_checksum") == checksum:
-                        d["current_audio_id"] = existing_fx["id"]
-                        d["status"] = "completed"
-                        applied += 1
-                        continue
-
-                    new_filename = f"fx_{_uuid.uuid4().hex[:8]}.wav"
-                    new_filepath = AUDIO_DIR / new_filename
-                    try:
-                        apply_effects_to_file(str(src_path), str(new_filepath), effects)
-                    except Exception:
-                        skipped += 1
-                        continue
-                    new_id = f"audio_{_uuid.uuid4().hex[:8]}"
-                    audio_url = f"/static/audio/{new_filename}"
-                    from app.api.episodes import _audio_duration
-                    d["audio_history"].append({
-                        "id": new_id,
-                        "url": audio_url,
-                        "filename": new_filename,
-                        "created_at": _store._now(),
-                        "effects_source_id": raw_audio_id,
+                # 创建后台任务，extra 携带执行所需全部信息
+                task_id = TaskManager.create(
+                    project_id=project_id,
+                    episode_id=ep_in["id"],
+                    task_type="apply_effects",
+                    total=1,
+                    extra={
+                        "dialogue_id": d["id"],
+                        "character_id": char_id,
                         "effects_checksum": checksum,
-                        "duration": _audio_duration(str(new_filepath)),
-                    })
-                    d["current_audio_id"] = new_id
-                    d["status"] = "completed"
-                    applied += 1
-            _store._write(data)
-            return {"applied": applied, "skipped": skipped}
+                        "effects_chain": effects,
+                        "mode": decision["mode"],
+                        "raw_audio_id": decision["raw_audio_id"],
+                    },
+                )
+                task_ids.append(task_id)
 
-    raise HTTPException(500, "更新数据失败")
+    # 后台启动串行执行（不阻塞 API 返回）
+    if task_ids:
+        asyncio.create_task(_run_tasks_with_lock(project_id, task_ids))
+
+    return {
+        "task_ids": task_ids,
+        "total": len(task_ids),
+        "skipped": skipped,
+    }
+
+
+# #103: 使用项目锁串行执行音效应用任务，避免并发写同一数据
+async def _run_tasks_with_lock(project_id: str, task_ids: list):
+    """使用项目锁串行执行音效应用任务。
+
+    对应 Issue: #103
+    设计说明: 通过 TaskManager.get_project_lock 获取项目级 asyncio.Lock，
+    确保同一项目的音效任务串行执行，避免并发读写 store.json。
+    """
+    from app.core.task_manager import TaskManager
+    lock = TaskManager.get_project_lock(project_id)
+    async with lock:
+        for tid in task_ids:
+            await _execute_apply_effect_task(project_id, tid)
+
+
+# #103: 单个对白音效应用任务的后台执行器
+# 三种模式: add(新增效果音) / replace(替换旧效果音) / create(无音频占位)
+async def _execute_apply_effect_task(project_id: str, task_id: str):
+    """单个对白音效应用任务的后台执行器。
+
+    对应 Issue: #103
+    设计说明: 从任务 extra 字段读取对白信息，定位原音文件，应用音效链生成新音频。
+    replace 模式会删除旧效果音文件并原地更新 audio_history 记录。
+    add 模式追加新记录到 audio_history。
+
+    Args:
+        project_id: 项目 ID
+        task_id: 任务 ID
+    """
+    from app.core.task_manager import TaskManager
+    from app.core.audio_effects import apply_effects_to_file
+    from app.api.episodes import _audio_duration
+
+    task = TaskManager.get(project_id, task_id)
+    if not task:
+        return
+    extra = task.get("extra", {})
+    dialogue_id = extra["dialogue_id"]
+    mode = extra["mode"]
+    raw_audio_id = extra["raw_audio_id"]
+    effects_chain = extra["effects_chain"]
+    checksum = extra["effects_checksum"]
+
+    try:
+        async with _store.atomic_update() as data:
+            # 定位对白
+            dialogue = None
+            for p in data["projects"]:
+                if p["id"] != project_id:
+                    continue
+                for ep_in in p["episodes"]:
+                    if ep_in["id"] != task["episode_id"]:
+                        continue
+                    for d in ep_in.get("dialogues", []):
+                        if d["id"] == dialogue_id:
+                            dialogue = d
+                            break
+
+            if not dialogue:
+                raise ValueError("对白不存在")
+
+            # #103: create 模式 — 无音频时对白标记 error；有音频时降级为 add
+            if mode == "create":
+                if not dialogue.get("current_audio_id"):
+                    raise ValueError("对白没有音频，无法应用音效")
+                mode = "add"
+                raw_audio_id = dialogue["current_audio_id"]
+
+            # 定位原音文件
+            audio_history = dialogue.get("audio_history", [])
+            src_ah = next((ah for ah in audio_history if ah["id"] == raw_audio_id), None)
+            if not src_ah:
+                raise ValueError("原音记录不存在")
+            src_filename = src_ah.get("filename", "")
+            if not src_filename:
+                raise ValueError("原音文件名缺失")
+            src_path = AUDIO_DIR / src_filename
+            if not src_path.exists():
+                raise ValueError("原音文件不存在")
+
+            fx_record = None
+            if mode == "replace":
+                # #103 Bug 修复：checksum 不同时必须替换，不是跳过
+                # 找到旧效果音记录
+                old_fx = next(
+                    (ah for ah in audio_history
+                     if ah.get("effects_source_id") == raw_audio_id
+                     and ah.get("effects_checksum") is not None),
+                    None
+                )
+                if old_fx and old_fx.get("filename"):
+                    # 删除旧效果音文件
+                    old_file = AUDIO_DIR / old_fx["filename"]
+                    if old_file.exists():
+                        old_file.unlink()
+                fx_record = old_fx
+                if fx_record:
+                    fx_record["effects_checksum"] = checksum
+
+            # 应用音效链生成新音频
+            new_filename = f"fx_{_uuid.uuid4().hex[:8]}.wav"
+            new_filepath = AUDIO_DIR / new_filename
+            apply_effects_to_file(str(src_path), str(new_filepath), effects_chain)
+
+            if fx_record:
+                # replace 模式：原地更新记录
+                fx_record["filename"] = new_filename
+                fx_record["url"] = f"/static/audio/{new_filename}"
+                fx_record["duration"] = _audio_duration(str(new_filepath))
+                new_id = fx_record["id"]
+            else:
+                # add 模式：追加新记录
+                new_id = f"audio_{_uuid.uuid4().hex[:8]}"
+                dialogue["audio_history"].append({
+                    "id": new_id,
+                    "url": f"/static/audio/{new_filename}",
+                    "filename": new_filename,
+                    "created_at": _store._now(),
+                    "effects_source_id": raw_audio_id,
+                    "effects_checksum": checksum,
+                    "duration": _audio_duration(str(new_filepath)),
+                })
+
+            dialogue["current_audio_id"] = new_id
+            dialogue["status"] = "completed"
+
+        TaskManager.update(project_id, task_id, status="complete", current=1)
+
+    except Exception as e:
+        logger.error("音效应用任务失败 [%s]: %s", task_id, e)
+        TaskManager.update(project_id, task_id, status="error", error=str(e))
 
 
 app.add_api_route(
