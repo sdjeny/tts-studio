@@ -119,6 +119,8 @@ const TaskPanel: React.FC<Props> = ({ projectId }) => {
       "continuation": "续写剧集",
       "generate_batch": "批量生成音频",
       "refresh": "刷新状态",
+      "single_audio": "单条音频生成", // #103: add single_audio label
+      "apply_effects": "应用音效", // #103: add apply_effects label
     };
     return labels[t] || t;
   };

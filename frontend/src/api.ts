@@ -409,8 +409,8 @@ export const api = {
     ),
 
   // apply character effects to entire episode
-  applyEffectsToEpisode: (pid: string, charId: string) =>
-    request<{ applied: number; skipped: number }>(
+  applyEffectsToEpisode: (pid: string, charId: string) => // #103: return { task_ids, total, skipped }
+    request<{ task_ids: string[]; total: number; skipped: number }>(
       `/projects/${pid}/apply-character-effects/${charId}`,
       { method: "POST" }
     ),

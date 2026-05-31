@@ -970,14 +970,22 @@ def _ensure_generation_tasks(project: dict) -> bool:
 
 
 def init_generation_task(project_id: str, episode_id: str, task_type: str,
-                         total: int = 0) -> str:
-    """Initialize a generation task, return task_id."""
+                         total: int = 0, extra: dict | None = None) -> str:
+    """Initialize a generation task, return task_id.
+
+    Args:
+        project_id: 项目 ID。
+        episode_id: 集数 ID。
+        task_type: 任务类型（如 outline、apply_effects 等）。
+        total: 任务总步数，默认为 0。
+        extra: #103: 扩展字段，音效应用任务需要携带对白ID、checksum等额外信息；不传时向后兼容。
+    """
     p = _read_project(project_id)
     if p is None:
         return ""
     task_id = f"gen_task_{uuid.uuid4().hex[:8]}"
     _ensure_generation_tasks(p)
-    p["generation_tasks"][task_id] = {
+    task_data = {
         "id": task_id,
         "episode_id": episode_id,
         "type": task_type,
@@ -988,6 +996,9 @@ def init_generation_task(project_id: str, episode_id: str, task_type: str,
         "updated_at": _now(),
         "error": None,
     }
+    if extra:  # #103: 音效应用任务需要携带对白ID、checksum等额外信息
+        task_data["extra"] = extra
+    p["generation_tasks"][task_id] = task_data
     _write_project(project_id, p)
     return task_id
 
@@ -1006,12 +1017,19 @@ def update_generation_task(project_id: str, task_id: str, **fields) -> bool:
 
 
 def get_generation_task(project_id: str, episode_id: str = None,
-                        task_type: str = None) -> dict | None:
-    """获取剧集最新的生成任务（优先返回 running 状态）。"""
+                        task_type: str = None,
+                        task_id: str = None) -> dict | None:
+    """获取剧集最新的生成任务（优先返回 running 状态）。
+
+    当 task_id 指定时，直接按 task_id 查找。
+    """
+    # #103 Review S-1: 增加 task_id 参数，支持 TaskManager.get(project_id, task_id) 按 ID 精确查找
     p = _read_project(project_id)
     if p is None:
         return None
     tasks = p.get("generation_tasks", {})
+    if task_id is not None:
+        return tasks.get(task_id)
     candidates = []
     for tid, t in tasks.items():
         if episode_id and t.get("episode_id") != episode_id:
