@@ -1017,12 +1017,19 @@ def update_generation_task(project_id: str, task_id: str, **fields) -> bool:
 
 
 def get_generation_task(project_id: str, episode_id: str = None,
-                        task_type: str = None) -> dict | None:
-    """获取剧集最新的生成任务（优先返回 running 状态）。"""
+                        task_type: str = None,
+                        task_id: str = None) -> dict | None:
+    """获取剧集最新的生成任务（优先返回 running 状态）。
+
+    当 task_id 指定时，直接按 task_id 查找。
+    """
+    # #103 Review S-1: 增加 task_id 参数，支持 TaskManager.get(project_id, task_id) 按 ID 精确查找
     p = _read_project(project_id)
     if p is None:
         return None
     tasks = p.get("generation_tasks", {})
+    if task_id is not None:
+        return tasks.get(task_id)
     candidates = []
     for tid, t in tasks.items():
         if episode_id and t.get("episode_id") != episode_id:

@@ -291,72 +291,94 @@ async def _execute_apply_effect_task(project_id: str, task_id: str):
     checksum = extra["effects_checksum"]
 
     try:
+        # #103 Review A-1: Step 1 — atomic_update 外读取对白信息和原音路径
+        project = _store.get_project(project_id)
+        if not project:
+            raise ValueError("项目不存在")
+        episode_id = task["episode_id"]
+        episode = next(
+            (ep for ep in project.get("episodes", []) if ep["id"] == episode_id), None
+        )
+        if not episode:
+            raise ValueError("剧集不存在")
+        dialogue = next(
+            (d for d in episode.get("dialogues", []) if d["id"] == dialogue_id), None
+        )
+        if not dialogue:
+            raise ValueError("对白不存在")
+
+        # create 模式 — 无音频时标记 error；有音频时降级为 add
+        if mode == "create":
+            if not dialogue.get("current_audio_id"):
+                raise ValueError("对白没有音频，无法应用音效")
+            mode = "add"
+            raw_audio_id = dialogue["current_audio_id"]
+
+        # 定位原音文件
+        audio_history = dialogue.get("audio_history", [])
+        src_ah = next(
+            (ah for ah in audio_history if ah["id"] == raw_audio_id), None
+        )
+        if not src_ah:
+            raise ValueError("原音记录不存在")
+        src_filename = src_ah.get("filename", "")
+        if not src_filename:
+            raise ValueError("原音文件名缺失")
+        src_path = AUDIO_DIR / src_filename
+        if not src_path.exists():
+            raise ValueError("原音文件不存在")
+
+        # replace 模式：查找旧效果音记录并删除旧文件
+        old_fx_id = None
+        if mode == "replace":
+            old_fx = next(
+                (ah for ah in audio_history
+                 if ah.get("effects_source_id") == raw_audio_id
+                 and ah.get("effects_checksum") is not None),
+                None
+            )
+            if old_fx and old_fx.get("filename"):
+                old_file = AUDIO_DIR / old_fx["filename"]
+                if old_file.exists():
+                    old_file.unlink()
+            if old_fx:
+                old_fx_id = old_fx["id"]
+
+        # #103 Review A-1: Step 2 — 线程池中执行 CPU 密集的音频处理
+        new_filename = f"fx_{_uuid.uuid4().hex[:8]}.wav"
+        new_filepath = AUDIO_DIR / new_filename
+        await asyncio.to_thread(
+            apply_effects_to_file, str(src_path), str(new_filepath), effects_chain
+        )
+        new_duration = _audio_duration(str(new_filepath))
+
+        # #103 Review A-1: Step 3 — atomic_update 内仅做数据写入
         async with _store.atomic_update() as data:
-            # 定位对白
+            # 重新定位 dialogue（数据可能已变更）
             dialogue = None
             for p in data["projects"]:
                 if p["id"] != project_id:
                     continue
                 for ep_in in p["episodes"]:
-                    if ep_in["id"] != task["episode_id"]:
+                    if ep_in["id"] != episode_id:
                         continue
                     for d in ep_in.get("dialogues", []):
                         if d["id"] == dialogue_id:
                             dialogue = d
                             break
-
             if not dialogue:
-                raise ValueError("对白不存在")
+                raise ValueError("atomic_update 中对白不存在")
 
-            # #103: create 模式 — 无音频时对白标记 error；有音频时降级为 add
-            if mode == "create":
-                if not dialogue.get("current_audio_id"):
-                    raise ValueError("对白没有音频，无法应用音效")
-                mode = "add"
-                raw_audio_id = dialogue["current_audio_id"]
-
-            # 定位原音文件
-            audio_history = dialogue.get("audio_history", [])
-            src_ah = next((ah for ah in audio_history if ah["id"] == raw_audio_id), None)
-            if not src_ah:
-                raise ValueError("原音记录不存在")
-            src_filename = src_ah.get("filename", "")
-            if not src_filename:
-                raise ValueError("原音文件名缺失")
-            src_path = AUDIO_DIR / src_filename
-            if not src_path.exists():
-                raise ValueError("原音文件不存在")
-
-            fx_record = None
-            if mode == "replace":
-                # #103 Bug 修复：checksum 不同时必须替换，不是跳过
-                # 找到旧效果音记录
-                old_fx = next(
-                    (ah for ah in audio_history
-                     if ah.get("effects_source_id") == raw_audio_id
-                     and ah.get("effects_checksum") is not None),
-                    None
-                )
-                if old_fx and old_fx.get("filename"):
-                    # 删除旧效果音文件
-                    old_file = AUDIO_DIR / old_fx["filename"]
-                    if old_file.exists():
-                        old_file.unlink()
-                fx_record = old_fx
-                if fx_record:
-                    fx_record["effects_checksum"] = checksum
-
-            # 应用音效链生成新音频
-            new_filename = f"fx_{_uuid.uuid4().hex[:8]}.wav"
-            new_filepath = AUDIO_DIR / new_filename
-            apply_effects_to_file(str(src_path), str(new_filepath), effects_chain)
-
-            if fx_record:
+            if old_fx_id:
                 # replace 模式：原地更新记录
-                fx_record["filename"] = new_filename
-                fx_record["url"] = f"/static/audio/{new_filename}"
-                fx_record["duration"] = _audio_duration(str(new_filepath))
-                new_id = fx_record["id"]
+                for ah in dialogue.get("audio_history", []):
+                    if ah["id"] == old_fx_id:
+                        ah["filename"] = new_filename
+                        ah["url"] = f"/static/audio/{new_filename}"
+                        ah["duration"] = new_duration
+                        ah["effects_checksum"] = checksum
+                        break
+                new_id = old_fx_id
             else:
                 # add 模式：追加新记录
                 new_id = f"audio_{_uuid.uuid4().hex[:8]}"
@@ -367,7 +389,7 @@ async def _execute_apply_effect_task(project_id: str, task_id: str):
                     "created_at": _store._now(),
                     "effects_source_id": raw_audio_id,
                     "effects_checksum": checksum,
-                    "duration": _audio_duration(str(new_filepath)),
+                    "duration": new_duration,
                 })
 
             dialogue["current_audio_id"] = new_id
