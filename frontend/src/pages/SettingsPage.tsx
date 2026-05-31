@@ -141,7 +141,13 @@ const FIELD_HINTS: Record<string, string> = {
   path: "文件路径",
   model_path: "模型文件路径",
   sample_rate: "采样率（Hz）",
-  chunk_size: "分块大小",
+  chunk_size: "分块大小", /* #105 */
+  num_episodes: "生成剧集数", /* #105 */
+  target_duration_min: "目标时长（分钟）", /* #105 */
+  narration_ratio: "旁白占比（%）", /* #105 */
+  do_sample: "是否启用采样", /* #105 */
+  repetition_penalty: "重复惩罚系数（>1 降低重复）", /* #105 */
+  voice_id: "默认语音 ID", /* #105 */
 };
 
 function getFieldHint(key: string): string {
@@ -193,7 +199,24 @@ export default function SettingsPage() {
       return next;
     });
     setDirty(true);
-  };
+  }; /* #105 */
+
+  /* #105: 更新嵌套对象（如 defaults.temperature）的子字段 */
+  const updateNestedField = (
+    section: string,
+    parentKey: string,
+    subKey: string,
+    subVal: any
+  ) => { /* #105 */
+    setEdited((prev) => { /* #105 */
+      const next = { ...prev }; /* #105 */
+      const nested = { ...(next[section]?.[parentKey] || {}) }; /* #105 */
+      nested[subKey] = subVal; /* #105 */
+      next[section] = { ...next[section], [parentKey]: nested }; /* #105 */
+      return next; /* #105 */
+    }); /* #105 */
+    setDirty(true); /* #105 */
+  }; /* #105 */
 
   /* 保存 */
   const handleSave = async () => {
@@ -278,7 +301,121 @@ export default function SettingsPage() {
           )}
         </label>
 
-        {fieldType === "boolean" ? (
+        {fieldType === "object" && value !== null && !Array.isArray(value) ? ( /* #105 */
+          <div key={key} style={{ marginBottom: 12 }}>
+            <label style={{ ...labelStyle, fontSize: 11, color: "#64748b", marginBottom: 6 }}>
+              {key}
+              {hint && (
+                <span style={{ marginLeft: 6, fontSize: 10, color: "#475569" }}>
+                  {hint}
+                </span>
+              )}
+            </label>
+            {Object.entries(value).length === 0 ? ( /* #105 */
+              <div style={{ fontSize: 11, fontStyle: "italic", color: "#64748b", paddingLeft: 12 }}>
+                无配置项
+              </div>
+            ) : (
+              <div style={{ /* #105 */
+                paddingLeft: 12,
+                borderLeft: "2px solid #334155",
+                marginTop: 8,
+                marginBottom: 12,
+                display: "grid",
+                gap: "4px 0",
+              }}>
+                {(Object.entries(value) as [string, any][]).map(([subKey, subVal]) => { /* #105 */
+                  const subSensitive = isSensitiveField(subKey);
+                  const subHint = getFieldHint(subKey);
+                  const subType = typeof subVal;
+                  return (
+                    <div key={subKey} style={{ marginBottom: 8 }}>
+                      <label style={labelStyle}>
+                        {subKey}
+                        {subSensitive && (
+                          <span style={{
+                            marginLeft: 6, fontSize: 10, color: "#f59e0b",
+                            background: "#78350f22", borderRadius: 3, padding: "1px 5px",
+                          }}>
+                            🔒 敏感
+                          </span>
+                        )}
+                        {subHint && (
+                          <span style={{ marginLeft: 6, fontSize: 10, color: "#475569" }}>
+                            {subHint}
+                          </span>
+                        )}
+                      </label>
+                      {subType === "boolean" ? ( /* #105 */
+                        <div style={{ display: "flex", gap: 8 }}>
+                          <button
+                            onClick={() => updateNestedField(section, key, subKey, true)}
+                            style={{
+                              flex: 1, padding: "6px 0",
+                              background: subVal ? "#3b82f6" : "#1e293b",
+                              color: subVal ? "#fff" : "#64748b",
+                              border: `1px solid ${subVal ? "#3b82f6" : "#334155"}`,
+                              borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 600,
+                            }}
+                          >
+                            True
+                          </button>
+                          <button
+                            onClick={() => updateNestedField(section, key, subKey, false)}
+                            style={{
+                              flex: 1, padding: "6px 0",
+                              background: !subVal ? "#3b82f6" : "#1e293b",
+                              color: !subVal ? "#fff" : "#64748b",
+                              border: `1px solid ${!subVal ? "#3b82f6" : "#334155"}`,
+                              borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 600,
+                            }}
+                          >
+                            False
+                          </button>
+                        </div>
+                      ) : subType === "number" ? ( /* #105 */
+                        <input
+                          type="number"
+                          value={String(subVal)}
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            const num = Number(raw);
+                            if (!isNaN(num) && raw !== "") {
+                              updateNestedField(section, key, subKey, Number.isInteger(subVal) ? parseInt(raw, 10) : num);
+                            } else if (raw === "") {
+                              updateNestedField(section, key, subKey, 0);
+                            }
+                          }}
+                          style={inputNumberStyle}
+                        />
+                      ) : ( /* #105 string fallback */
+                        <input
+                          type={subSensitive ? "password" : "text"}
+                          value={String(subVal ?? "")}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (typeof subVal === "number" || (typeof subVal === "string" && isNumericString(subVal))) {
+                              const num = Number(val);
+                              if (!isNaN(num) && val.trim() !== "") {
+                                updateNestedField(section, key, subKey, typeof subVal === "number" ? num : val);
+                                return;
+                              }
+                            }
+                            updateNestedField(section, key, subKey, val);
+                          }}
+                          style={{
+                            ...inputStyle,
+                            ...(subSensitive ? { fontFamily: "monospace", letterSpacing: 2 } : {}),
+                          }}
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        ) : fieldType === "boolean" ? (
           <div style={{ display: "flex", gap: 8 }}>
             <button
               onClick={() => updateField(section, key, true)}
