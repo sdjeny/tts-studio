@@ -13,10 +13,12 @@ class TaskManager:
     TASK_TYPES = ("outline", "dialogues", "continuation", "generate_batch", "refresh", "single_audio", "apply_effects")  # #103: 新增音效应用任务类型
     
     @staticmethod
-    def create(project_id: str, episode_id: str, task_type: str, total: int = 0) -> str:
+    # #103: 增加 extra 参数，转发给 init_generation_task 以携带任务附加信息
+    def create(project_id: str, episode_id: str, task_type: str, total: int = 0,
+               extra: dict | None = None) -> str:
         """创建任务记录，返回 task_id。"""
         from app.core.store import init_generation_task
-        return init_generation_task(project_id, episode_id, task_type, total=total)
+        return init_generation_task(project_id, episode_id, task_type, total=total, extra=extra)
     
     @staticmethod
     def get(project_id: str, task_id: str) -> Optional[dict]:
