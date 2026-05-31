@@ -80,7 +80,7 @@
 | 前端服务正常 | 访问 5173 返回 200 | `curl http://localhost:5173/` |
 | API 代理正常 | `/api/*` 代理到 8000 | 前端页面能正常加载项目列表 |
 
-## 九、配置页面（Issue #11）
+## 九、配置页面（Issue #11 / #105）
 
 ### 9.1 Config API
 
@@ -96,7 +96,7 @@
 | 配置持久化 | PATCH 后 config.yaml 写入新值 | `grep temperature config.yaml` | ✅ 持久化 |
 | `GET /api/health` | `{"status":"ok"}` | `curl /api/health` | ✅ |
 
-### 9.2 前端 Settings 页面
+### 9.2 前端 Settings 页面（含 Issue #105 嵌套对象修复）
 
 | 检查项 | 期望值 | 验证方式 | 实际结果 |
 |--------|--------|----------|----------|
@@ -107,6 +107,9 @@
 | 保存后 toast | 绿色成功提示 | 浏览器操作验证 | ✅ 按钮变为"✓ 已保存" |
 | 保存后持久化 | 刷新页面值还在 | 浏览器刷新验证 | ✅ 改0.75→保存→刷新→仍0.75 |
 | 控制台无 JS 错误 | Console 无红色报错 | `browser_console()` | ✅ 0 errors |
+| 嵌套对象正常渲染 | defaults 展开显示子字段（非 [object Object]） | 浏览器检查 tts.defaults 和 gen.defaults | |
+| 嵌套字段可编辑保存 | 改值→保存→刷新→值保留 | 改 tts.defaults.temperature 后验收 | |
+| 嵌套字段重置功能 | 修改后点"放弃修改"回退 | 修改→放弃→检查 | |
 
 ### 9.3 注意事项
 
