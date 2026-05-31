@@ -111,6 +111,7 @@ async def health():
 
 async def api_apply_effects_to_all(project_id: str, char_id: str):
     """对项目中指定角色的所有对白批量应用当前角色音效链。"""
+    from app.core.audio_effects import apply_effects_to_file, compute_effects_checksum
     proj = get_project(project_id)
     if not proj:
         raise HTTPException(404, "Project not found")
@@ -126,6 +127,8 @@ async def api_apply_effects_to_all(project_id: str, char_id: str):
     effects = char.get("audio_effects", [])
     if not effects:
         raise HTTPException(400, "该角色没有配置音效")
+
+    checksum = compute_effects_checksum(effects)
 
     applied = 0
     skipped = 0
@@ -149,9 +152,10 @@ async def api_apply_effects_to_all(project_id: str, char_id: str):
                     if not current_ah:
                         skipped += 1
                         continue
-                    if not current_ah.get("raw", False):
+                    if current_ah.get("effects_source_id") is not None:
                         skipped += 1
                         continue
+                    raw_audio_id = current_ah["id"]
                     src_filename = current_ah.get("filename", "")
                     if not src_filename:
                         skipped += 1
@@ -160,6 +164,20 @@ async def api_apply_effects_to_all(project_id: str, char_id: str):
                     if not src_path.exists():
                         skipped += 1
                         continue
+
+                    existing_fx = None
+                    for ah in d.get("audio_history", []):
+                        if (ah.get("effects_source_id") == raw_audio_id
+                                and ah.get("effects_checksum") is not None):
+                            existing_fx = ah
+                            break
+
+                    if existing_fx and existing_fx.get("effects_checksum") == checksum:
+                        d["current_audio_id"] = existing_fx["id"]
+                        d["status"] = "completed"
+                        applied += 1
+                        continue
+
                     new_filename = f"fx_{_uuid.uuid4().hex[:8]}.wav"
                     new_filepath = AUDIO_DIR / new_filename
                     try:
@@ -175,7 +193,8 @@ async def api_apply_effects_to_all(project_id: str, char_id: str):
                         "url": audio_url,
                         "filename": new_filename,
                         "created_at": _store._now(),
-                        "raw": False,
+                        "effects_source_id": raw_audio_id,
+                        "effects_checksum": checksum,
                         "duration": _audio_duration(str(new_filepath)),
                     })
                     d["current_audio_id"] = new_id

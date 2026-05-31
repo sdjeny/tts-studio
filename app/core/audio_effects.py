@@ -21,7 +21,9 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
 import io
+import json
 import numpy as np
 import soundfile as sf
 from pathlib import Path
@@ -263,3 +265,20 @@ def validate_effects_chain(effects_chain: list[dict[str, Any]]) -> str | None:
             if value < pdef["min"] or value > pdef["max"]:
                 return f"Param '{param_name}' out of range [{pdef['min']}, {pdef['max']}]"
     return None
+
+
+def compute_effects_checksum(effects_chain: list[dict]) -> str:
+    """
+    对音效链配置计算 MD5 摘要，用于检测音效链是否变更。
+    相同音效链 → 相同 checksum；任一参数变化 → checksum 变化。
+    """
+    normalized = []
+    for fx in effects_chain:
+        if not fx.get("enabled", True):
+            continue
+        normalized.append({
+            "type": fx["type"],
+            "params": dict(sorted(fx.get("params", {}).items())),
+        })
+    raw = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()
