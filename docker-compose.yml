@@ -8,6 +8,7 @@ services:
     volumes:
       - ./app:/app/app
       - ./data:/app/data
+      - ./frontend/dist:/app/frontend/dist
     environment:
       - DATA_DIR=/app/data
       - TTS_API_BASE=${TTS_API_BASE:-http://host.docker.internal:8001}

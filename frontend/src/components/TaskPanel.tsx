@@ -212,7 +212,11 @@ const TaskPanel: React.FC<Props> = ({ projectId }) => {
                 padding: "2px 6px", borderRadius: 4, fontSize: 11, fontWeight: 600 }}>
                 {st}
               </span>
-              <span style={{ fontWeight: 500 }}>{tt}</span>
+              <span style={{ fontWeight: 500 }}>
+                {task.type === "apply_effects" && task.extra?.char_name /* #108 */
+                  ? <>为「{task.extra.char_name}」{tt}</>
+                  : tt}
+              </span>
               <span style={{ color: "#64748b", fontSize: 11 }}>
                 {task.created_at?.slice(5, 16) || task.updated_at?.slice(5, 16) || ""}
               </span>
