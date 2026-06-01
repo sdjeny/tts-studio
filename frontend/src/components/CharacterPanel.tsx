@@ -90,15 +90,21 @@ export default function CharacterPanel({ project, onChange, onError }: {
   };
 
   const [applyingEffects, setApplyingEffects] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null); /* #108: add toast state */
 
-  const applyEffectsToEpisode = async (cId: string) => { // #103: show task count, remove await onChange
+  const showToast = (msg: string) => { /* #108: add showToast */
+    setToast(msg); /* #108 */
+    setTimeout(() => setToast(null), 4000); /* #108 */
+  }; /* #108 */
+
+  const applyEffectsToEpisode = async (cId: string, charName: string) => { // #103: show task count, remove await onChange /* #108: add charName param */
     setApplyingEffects(cId);
     try {
       const res = await api.applyEffectsToEpisode(project.id, cId);
       if (res.total > 0) {
-        alert(`已创建 ${res.total} 个音效处理任务（${res.skipped} 条跳过），请在任务面板查看进度`);
+        showToast(`已为「${charName}」创建 ${res.total} 个音效处理任务（${res.skipped} 条跳过），请在任务面板查看进度`); /* #108: use showToast + charName */
       } else {
-        alert(`所有对白音效已是最新，无需处理（${res.skipped} 条跳过）`);
+        showToast(`「${charName}」所有对白音效已是最新，无需处理（${res.skipped} 条跳过）`); /* #108: use showToast + charName */
       }
     } catch (e: any) { onError("应用音效失败: " + e.message); }
     finally { setApplyingEffects(null); }
@@ -116,6 +122,11 @@ export default function CharacterPanel({ project, onChange, onError }: {
 
   return (
     <div>
+      {toast && ( /* #108: show toast */
+        <div style={{ background: '#22c55e18', color: '#22c55e', padding: '8px 12px', borderRadius: 4, marginBottom: 8, fontSize: 13 }}>
+          {toast}
+        </div>
+      )}
       {/* 添加角色 */}
       <div style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 10, padding: 16, marginBottom: 16 }}>
         <h3 style={{ margin: "0 0 12px", fontSize: 15 }}>+ 添加角色</h3>
@@ -176,7 +187,7 @@ export default function CharacterPanel({ project, onChange, onError }: {
                     <div style={{ display: "flex", gap: 6 }}>
                       {ch.audio_effects?.length > 0 && project.episodes?.length > 0 && (
                         <button
-                          onClick={() => applyEffectsToEpisode(ch.id)}
+                          onClick={() => applyEffectsToEpisode(ch.id, ch.name)} /* #108: pass charName */
                           style={{ ...smallBtn, color: "#a78bfa", borderColor: "#7c3aed", fontSize: 11 }}
                           disabled={applyingEffects === ch.id}
                           title="将该角色的音效应用到所有剧集的所有对白"
